@@ -9,6 +9,7 @@ module Terminal.Screen
   , Cell(..)
   , ScreenColor(..)
   , intensify
+  , getLine
   , ScreenState()
   , ScreenStateMut()
   , screenSize
@@ -37,14 +38,19 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Data
 import Data.Foldable
 import Data.Hashable
+import qualified Data.IntMap.Strict as IM
+import Data.Maybe
 import Data.Monoid
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Builder as TB
 import qualified Data.Text.Encoding as T
 import Data.Word
 import Foreign.C.Types
 import Foreign.Ptr
 import Foreign.Storable
 import GHC.Generics
+import Prelude hiding ( getLine )
 import System.Endian
 import System.IO.Unsafe
 
@@ -97,6 +103,25 @@ newtype ScreenState = ScreenState
 newtype ScreenStateMut s = ScreenStateMut
   { rawCellsMut :: MA.STArray s (Int, Int) Cell }
   deriving ( Typeable, Generic )
+
+-- | Returns a line from screen state as text and also returning a function
+-- that maps an index in that text to the column it is on the screen.
+getLine :: Int -> ScreenState -> (T.Text, Int -> Int)
+getLine row ss@(ScreenState cells) =
+  let (built, indexmap, _) = foldl' folder (mempty, IM.empty, 0) [0..sw-1]
+   in (TL.toStrict $ TB.toLazyText built
+      ,\i -> snd $ fromMaybe (error "getLine: index out of range")
+                             (IM.lookupLE i indexmap))
+ where
+  folder (builder, indexmap, txtindex) column =
+    let cont = contents (cells A.! (column, row))
+        part = TB.fromText cont
+        new_indexmap = IM.insert txtindex column indexmap
+        new_builder = builder <> part
+
+     in new_builder `seq` new_indexmap `seq` (new_builder, new_indexmap, txtindex+T.length cont)
+
+  (sw, sh) = screenSize ss
 
 screenSize :: ScreenState -> (Int, Int)
 screenSize (ScreenState { rawCells = rc }) =
