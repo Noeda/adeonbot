@@ -38,6 +38,7 @@ library
   hs-source-dirs:      src
   c-sources:           cbits/wcwidth.c
                        cbits/terminal.c
+                       cbits/pty.c
   ghc-options:         -Wall -fno-warn-name-shadowing
   default-language:    Haskell2010
 

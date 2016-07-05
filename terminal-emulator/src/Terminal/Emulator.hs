@@ -29,7 +29,8 @@ import GHC.Generics
 import Terminal.Screen
 
 data EmulatorF f
-  = ReadByte (Word8 -> f)
+  = UpdateCursorPosition !Int !Int f
+  | ReadByte (Word8 -> f)
   | PeekByte (Word8 -> f)
   | YieldChange (forall s. ScreenStateMut s -> ST s ()) f
   | GetCurrentState (ScreenState -> f)
@@ -38,18 +39,21 @@ data EmulatorF f
 type Emulator a = Free EmulatorF a
 
 class Monad m => MonadEmulator m where
+  updateCursorPosition :: Int -> Int -> m ()
   readByte :: m Word8
   peekByte :: m Word8
   yield :: (forall s. ScreenStateMut s -> ST s ()) -> m ()
   getScreenState :: m ScreenState
 
 instance MonadEmulator (Free EmulatorF) where
+  updateCursorPosition x y = liftF $ UpdateCursorPosition x y ()
   readByte = liftF $ ReadByte id
   peekByte = liftF $ PeekByte id
   yield fun = liftF $ YieldChange fun ()
   getScreenState = liftF $ GetCurrentState id
 
 instance MonadEmulator m => MonadEmulator (StateT s m) where
+  updateCursorPosition x y = lift $ updateCursorPosition x y
   readByte = lift readByte
   peekByte = lift peekByte
   yield fun = lift $ yield fun
@@ -336,6 +340,9 @@ emulator :: Emulator ()
 emulator = flip evalStateT initialEmulatorState $ forever $ do
   -- Flip cursor pos
   st <- get
+
+  (ux, uy) <- cursor <$> get
+  updateCursorPosition ux uy
 
   when (showCursor st) $ do
     (cx, cy) <- cursor <$> get

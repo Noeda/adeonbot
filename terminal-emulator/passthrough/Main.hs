@@ -25,7 +25,7 @@ main = withRawTerminalMode $ do
 
   args <- getArgs
 
-  withProcessInPty (proc (args !! 0) (tail args)) $ \read_input write_output ->
+  withProcessInPty (args !! 0) (tail args) $ \read_input write_output ->
     withAsync (forever $ do
                  bs <- B.hGetSome stdin 1024
                  atomically $ write_output bs) $ \_ -> flip evalStateT (emptyScreenState w h, emulator) $ forever $ do
@@ -43,6 +43,8 @@ main = withRawTerminalMode $ do
   exhaust thawed st bs emu = do
     case emu of
       Pure () -> error "impossible!"
+      Free (UpdateCursorPosition _ _ next) -> exhaust thawed st bs next
+
       Free (ReadByte fun) ->
         if B.null bs
           then do new_st <- freezeScreen thawed
