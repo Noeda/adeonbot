@@ -50,12 +50,13 @@ showUsage handle = do
   hPutStrLn handle "Usage:"
   hPutStrLn handle "adeonbot [CONFIG FILE]"
 
-botEntry :: BotConfig -> STM (ScreenState, Int, Int, Integer) -> (B.ByteString -> STM ()) -> IO ()
-botEntry config getNextStatus send = aiLoop (emptyAIState config)
+botEntry :: BotConfig -> STM (ScreenState, Int, Int, Integer) -> IO () -> (B.ByteString -> STM ()) -> IO ()
+botEntry config getNextStatus refresh send = aiLoop (emptyAIState config)
  where
   aiLoop aistate = do
     status <- waitUntilCooldown
     new_aistate <- botLogic status aistate
+    refresh
     aiLoop new_aistate
 
   waitUntilCooldown = do
@@ -89,11 +90,13 @@ run config = withRawTerminalMode $ do
   status_tvar <- newTVarIO (emptyScreenState 80 24, 0, 0, now)
 
   let get_next_status = readTVar status_tvar
+      refresh = do now <- toNanoSecs <$> getTime Monotonic
+                   atomically $ modifyTVar status_tvar $ \(x, y, z, _) -> (x, y, z, now)
 
   tid <- myThreadId
 
   withProcessInPty (cmd !! 0) (tail cmd) $ \read_input write_output ->
-    withAsync (botEntry config get_next_status write_output >> killThread tid) $ \bot_async -> do
+    withAsync (botEntry config get_next_status refresh write_output >> killThread tid) $ \bot_async -> do
       liftIO $ link bot_async
       withAsync (forever $ do
                   bs <- B.hGetSome stdin 1024
