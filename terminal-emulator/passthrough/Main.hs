@@ -37,7 +37,6 @@ main = withRawTerminalMode $ do
       put (new_st, new_emu)
       liftIO $ do
         BL.putStr (toANSIOutput Nothing new_st)
-        --new_st `seq` print (14, bs)
         hFlush stdout
  where
   exhaust :: ScreenStateMut s -> ScreenState -> B.ByteString -> Emulator () -> ST s (ScreenState, Emulator ())
