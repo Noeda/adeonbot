@@ -8,12 +8,14 @@ module Terminal.Screen
   , emptyScreenState
   , Cell(..)
   , ScreenColor(..)
+  , intensify
   , ScreenState()
   , ScreenStateMut()
   , screenSize
   , thawScreen
   , freezeScreen
   , writeCharacter
+  , readCharacter
   , writeText
   , copy
   , ST()
@@ -58,6 +60,7 @@ textWidth txt = unsafePerformIO $ do
     fromIntegral <$> mk_wcswidth
                      (castPtr cstr)
                      (fromIntegral cstr_len `div` fromIntegral (sizeOf (undefined :: Word32)))
+{-# INLINE textWidth #-}
 
 data ScreenColor
   = Black | Red | Green | Blue
@@ -67,6 +70,17 @@ data ScreenColor
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
 
 instance Hashable ScreenColor
+
+intensify :: ScreenColor -> ScreenColor
+intensify Black = DarkGray
+intensify Red = BrightRed
+intensify Green = BrightGreen
+intensify Blue = BrightBlue
+intensify Magenta = BrightMagenta
+intensify Cyan = BrightCyan
+intensify Yellow = BrightYellow
+intensify LightGray = White
+intensify x = x
 
 data Cell = Cell
   { foregroundColor :: !ScreenColor
@@ -161,6 +175,15 @@ writeCharacter x y cell' (ScreenStateMut cells) = do
            then cell' { contents = " " }
            else cell'
 {-# INLINE writeCharacter #-}
+
+readCharacter :: Int -> Int -> ScreenStateMut s -> ST s Cell
+readCharacter x y (ScreenStateMut cells) = do
+  ((0, 0), (w, h)) <- MA.getBounds cells
+  if x >= 0 && y >= 0 && y <= h && x <= w
+    then MA.readArray cells (x, y)
+    else return $ Cell { foregroundColor = White
+                       , backgroundColor = Black
+                       , contents = " " }
 
 foregroundCode :: ScreenColor -> B.ByteString
 foregroundCode Black = "30"

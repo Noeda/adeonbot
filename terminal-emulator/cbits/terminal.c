@@ -51,7 +51,7 @@ struct termios* set_character_mode( char** errmsg )
     memcpy( old, &to, sizeof(to) );
 
     to.c_lflag &= ~ECHO;
-//    to.c_lflag &= ~ISIG;
+    to.c_lflag &= ~ISIG;
     to.c_lflag &= ~ICANON;
 
     if ( tcsetattr( STDIN_FILENO, TCSADRAIN, &to ) == -1 ) {
