@@ -19,6 +19,7 @@ module Bot.NetHack.WorldState
   , LevelCell(..)
   , cellFeature
   , cellItems
+  , cellItemAppearanceLastTime
   , Monster(..)
   , Status(..)
   , ItemPileImage(..)
@@ -55,6 +56,7 @@ data Level = Level
 
 data LevelCell = LevelCell
   { _cellFeature :: !(Maybe LevelFeature)
+  , _cellItemAppearanceLastTime :: String
   , _cellItems :: !ItemPileImage }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
@@ -115,6 +117,7 @@ emptyWorldState = WorldState
 emptyLevelCell :: LevelCell
 emptyLevelCell = LevelCell
   { _cellFeature = Nothing
+  , _cellItemAppearanceLastTime = ""
   , _cellItems = NoPile }
 
 emptyLevel :: Level

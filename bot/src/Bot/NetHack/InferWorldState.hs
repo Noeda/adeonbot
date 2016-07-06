@@ -88,6 +88,23 @@ descriptionToLevelFeature txt | T.isInfixOf "altar" txt = Just Altar
 descriptionToLevelFeature txt | T.isInfixOf "trap" txt = Just Trap
 descriptionToLevelFeature _ = Nothing
 
+isItemSymbol :: T.Text -> ScreenColor -> Bool
+isItemSymbol "(" _ = True
+isItemSymbol ")" _ = True
+isItemSymbol "\"" fcolor | fcolor == Cyan = True
+isItemSymbol "!" _ = True
+isItemSymbol "?" _ = True
+isItemSymbol "/" _ = True
+isItemSymbol "=" _ = True
+isItemSymbol "+" _ = True
+isItemSymbol "*" _ = True
+isItemSymbol "`" _ = True
+isItemSymbol "$" _ = True
+isItemSymbol "%" _ = True
+isItemSymbol "0" fcolor | fcolor == Cyan = True
+isItemSymbol "_" fcolor | fcolor == Cyan = True
+isItemSymbol _ _ = False
+
 inferLevel :: MonadAI m => Level -> StateT WorldState m Level
 inferLevel lvl = do
   (ss, cx, cy) <- currentScreen
@@ -99,10 +116,24 @@ inferLevel lvl = do
                     inferring cx cy sw sh statuses mutcells ss
                     return mutcells
 
-  let updated_lvl = lvl & cells .~ new_cells
+      new_boulders = inferBoulders ss
+
+  let updated_lvl = lvl & (cells .~ new_cells) .
+                          (boulders .~ new_boulders)
 
   inferCurrentlyStandingSquare updated_lvl
  where
+  inferBoulders :: ScreenState -> S.Set (Int, Int)
+  inferBoulders ss = foldl' folding S.empty [(x, y) | x <- [0..sw-1], y <- [0..sh-3]]
+   where
+    (sw, sh) = screenSize ss
+
+    folding set (x, y) =
+      let cell = getCell x y ss
+       in if contents cell == "0" && foregroundColor cell == LightGray
+            then S.insert (x, y) set
+            else set
+
   inferring :: Int
             -> Int
             -> Int
@@ -124,7 +155,7 @@ inferLevel lvl = do
           -- Return Nothing if you don't want to modify existing feature.
           inferred = case contents cell of
             "." -> Just Floor
-            "_" -> Just Altar
+            "_" | fcolor == LightGray -> Just Altar
             "#" | fcolor == Green -> Just Wall
             "#" | fcolor == Cyan -> Just Wall
             "#" | fcolor == Yellow -> Just Wall
@@ -147,7 +178,17 @@ inferLevel lvl = do
             _ -> Nothing
 
       case inferred of
-        Nothing -> return ()
+        Nothing ->
+          -- If we can't infer any new information then maybe we can infer
+          -- something about items?
+          when (isItemSymbol (contents cell) (foregroundColor cell)) $ do
+            old_cell <- A.readArray mutcells (column, row)
+            let scell = show cell
+            when ((old_cell^.cellItemAppearanceLastTime) /= scell) $
+              A.writeArray mutcells (column, row)
+                (old_cell & (cellItems .~ PileSeen) .
+                            (cellItemAppearanceLastTime .~ scell))
+
         Just new_feature -> do
           old_cell <- A.readArray mutcells (column, row)
           A.writeArray mutcells (column, row) (old_cell & cellFeature .~ Just new_feature)
