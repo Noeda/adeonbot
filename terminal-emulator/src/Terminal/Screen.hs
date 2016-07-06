@@ -10,6 +10,7 @@ module Terminal.Screen
   , ScreenColor(..)
   , intensify
   , getLine
+  , getLine'
   , getCell
   , ScreenState()
   , ScreenStateMut()
@@ -108,8 +109,16 @@ newtype ScreenStateMut s = ScreenStateMut
 -- | Returns a line from screen state as text and also returning a function
 -- that maps an index in that text to the column it is on the screen.
 getLine :: Int -> ScreenState -> (T.Text, Int -> Int)
-getLine row ss@(ScreenState cells) =
-  let (built, indexmap, _) = foldl' folder (mempty, IM.empty, 0) [0..sw-1]
+getLine row ss = getLine' row 0 ss
+
+-- | Same as `getLine` but you can restrict to only start at column X.
+--
+-- @
+--   getLine' row leftcolumn screenstate
+-- @
+getLine' :: Int -> Int -> ScreenState -> (T.Text, Int -> Int)
+getLine' row leftcolumn ss@(ScreenState cells) =
+  let (built, indexmap, _) = foldl' folder (mempty, IM.empty, 0) [leftcolumn..sw-1]
    in (TL.toStrict $ TB.toLazyText built
       ,\i -> snd $ fromMaybe (error "getLine: index out of range")
                              (IM.lookupLE i indexmap))

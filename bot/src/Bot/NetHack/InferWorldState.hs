@@ -14,6 +14,7 @@ import qualified Data.Array.MArray as A
 import qualified Data.Array.ST as A
 import Data.Foldable
 import Data.Maybe
+import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Terminal.Screen
@@ -42,7 +43,14 @@ freshLevel li = levels.at li .= Just emptyLevel
 inferCurrentlyStandingSquare :: MonadAI m => Level -> StateT WorldState m Level
 inferCurrentlyStandingSquare lvl = do
   (_, cx, cy) <- currentScreen
-  if isNothing $ join $ (lvl^?cells.ix (cx, cy).cellFeature)
+
+  -- Check floor if
+  -- 1) We don't know what level feature we are standing on.
+  -- 2) There are items on the floor but we haven't checked which items
+  -- exactly.
+  let lcell = lvl^?cells.ix (cx, cy)
+  if (isNothing $ join $ lcell^?_Just.cellFeature) ||
+     (lcell^?_Just.cellItems == Just PileSeen)
     then checkFloor cx cy
     else return lvl
  where
@@ -59,11 +67,76 @@ inferCurrentlyStandingSquare lvl = do
                             -- when the player moves.
           else Nothing
 
+    -- There might be a --More-- prompt here
+    more <- matchf (limitRows [0, 1] "--More--")
+    when more $ send " "
+
     -- Update floor if we got a positive match
-    case what_is_that_thing of
-      Nothing -> return lvl
-      Just inferred_thing ->
-        return $ lvl & cells.ix (cx, cy).cellFeature .~ Just inferred_thing
+    let update1 = case what_is_that_thing of
+                    Nothing -> id
+                    Just inferred_thing -> \x -> x & cells.ix (cx, cy).cellFeature .~ Just inferred_thing
+
+    -- Do item list inferring
+    newitems <- inferItemsBeingLookedAt (fromJust $ lvl^?cells.ix (cx, cy).cellItems)
+
+    let update2 = \x -> x & cells.ix (cx, cy).cellItems .~ newitems
+
+    return $ update2 $ update1 lvl
+
+-- | Infers items on screen based on view you get by pressing :
+--
+-- May press space to look at more items if the pile has lots and lots.
+inferItemsBeingLookedAt :: MonadAI m => ItemPileImage -> m ItemPileImage
+inferItemsBeingLookedAt _ = do
+  b <- matchf (limitRows [0] $ regex "You see no objects here.|You feel no objects here.")
+  if b then return NoPile else inferListing
+ where
+  inferListing = do
+    -- Single item case?
+    matchf (limitRows [0] $ regex "You (see|feel) here (a |an |the )?(.+)( \\([0-9]+ aum\\))?\\.") >>= \case
+      [_whole, _seefeel, _article, name, _weight] ->
+        return $ Pile [nameToItem name]
+      _ ->
+        -- Multi item case then
+        matchf (limitRows [0] $ regex "Things that you feel here:|Things that you see here:") >>= \case
+          Just dd -> itemInferLoop dd
+          Nothing ->
+            -- This case shouldn't happen
+            return NoPile
+
+  itemInferLoop dd = do
+    (ss, _, _) <- currentScreen
+
+    let left_column = x dd
+        -- Row where item listing starts (immediately below header)
+        top_row = y dd + 1
+
+    -- There should be a --More-- at the bottom
+    matchf "--More--" >>= \case
+      Just more_dd -> do
+        let bottom_row = y more_dd - 1
+            item_lines = [ T.strip (fst (getLine' row left_column ss)) |
+                           row <- [top_row..bottom_row] ]
+            items = fmap nameToItem item_lines
+
+        send " "
+
+        -- If there is another --More--, parse more items
+        b <- matchf "--More--"
+        if b
+          then do rest_of_items <- itemInferLoop (dd { x = 0
+                                                     , y = -1 })
+                  case rest_of_items of
+                    Pile items2 -> return $ Pile $ items <> items2
+                    _ -> return $ Pile items
+          else return $ Pile items
+
+      Nothing ->
+        -- This shouldn't happen. But maybe it did anyway?
+        return NoPile
+
+nameToItem :: T.Text -> Item
+nameToItem = error . show
 
 descriptionToLevelFeature :: T.Text -> Maybe LevelFeature
 descriptionToLevelFeature "staircase up" = Just Upstairs

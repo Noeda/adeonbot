@@ -8,7 +8,8 @@ module Bot.NetHack.ScreenPattern
   , Detailed(..)
   , match
   , regex
-  , limitRows )
+  , limitRows
+  , debugPattern )
   where
 
 import Data.Data
@@ -49,6 +50,9 @@ data Detailed = Detailed
 class Match match where
   fromDetailed :: Maybe Detailed -> match
 
+instance Match (Maybe Detailed) where
+  fromDetailed = id
+
 instance Match Bool where
   fromDetailed (Just{}) = True
   fromDetailed Nothing = False
@@ -64,7 +68,7 @@ instance Match [String] where
 eligibleRows :: ScreenState -> ScreenPattern -> S.Set Int
 eligibleRows ss pattern = case pattern of
   RowLimited rows payload ->
-    S.union (S.intersection rows screenrows) (eligibleRows ss payload)
+    S.intersection (S.intersection rows screenrows) (eligibleRows ss payload)
   _ -> screenrows
  where
   (_, sh) = screenSize ss
@@ -100,7 +104,7 @@ patternTest (RegexPattern regex) subject row indexer =
   case matchOnce regex (T.unpack subject) :: Maybe MatchArray of
     Nothing -> Nothing
     Just arr ->
-      let lowest_offset = minimum $ fmap (\(offset, _) -> offset) arr
+      let lowest_offset = minimum $ fmap (\(offset, _) -> if offset /= -1 then offset else 1000000000) arr
           highest_offset = maximum $ fmap (\(offset, _) -> offset) arr
        in Just $ Detailed
             { x = indexer lowest_offset
@@ -111,4 +115,14 @@ patternTest (RegexPattern regex) subject row indexer =
                 T.take len $ T.drop offset subject }
 
 patternTest (RowLimited _ inner) subject row indexer = patternTest inner subject row indexer
+
+-- | Convenience function to test regexes on ghci REPL.
+--
+-- @
+--   debugPattern subject regex
+-- @
+debugPattern :: String -> String -> [MatchText String]
+debugPattern subject reg =
+  let r = makeRegex reg :: Regex
+   in matchAllText r subject
 

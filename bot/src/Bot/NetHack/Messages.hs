@@ -5,6 +5,7 @@ module Bot.NetHack.Messages
   where
 
 import Bot.NetHack.MonadAI
+import Control.Monad
 import Data.Monoid
 import qualified Data.Text as T
 
@@ -13,7 +14,26 @@ import qualified Data.Text as T
 -- Returns all the messages saw on the screen.
 consumeMessages :: MonadAI m => m [T.Text]
 consumeMessages = do
+  skipThingsThatAreHere
+  msgs1 <- pluckMessages
+  skipThingsThatAreHere
+  msgs2 <- pluckMessages
+  return $ msgs1 <> msgs2
+
+skipThingsThatAreHere :: MonadAI m => m ()
+skipThingsThatAreHere = do
   topline <- getScreenLine 0
+
+  -- Skip "Things that are here:" item listing
+  when (T.isInfixOf "Things that are here:" topline ||
+        T.isInfixOf "Things that you feel here:" topline) $ do
+    has_more <- matchf "--More--"
+    when has_more $ send " "
+
+pluckMessages :: MonadAI m => m [T.Text]
+pluckMessages = do
+  topline <- getScreenLine 0
+
   -- Break the top line from places where double spaces occur.
   -- Not 100% watertight but it should keep most relevant messages properly
   -- separated.
