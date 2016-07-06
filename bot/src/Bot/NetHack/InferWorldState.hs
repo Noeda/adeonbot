@@ -56,11 +56,11 @@ inferCurrentlyStandingSquare lvl = do
  where
   checkFloor cx cy = do
     send ":"
-    thing <- matchf (limitRows [0] $ regex "There is (a |an )?(.+) here.")
+    thing <- matchf (limitRows [0] $ regex "There is (a |an )?([a-zA-Z]+|[a-zA-Z]+ [a-zA-Z]+) here.")
     what_is_that_thing <- case thing of
       [_, _, description] -> return $ descriptionToLevelFeature description
       _ -> do
-        b <- matchf (limitRows [0] $ regex "You see no objects here.|You feel no objects here.")
+        b <- matchf (limitRows [0] $ regex "You see no objects here.|You feel no objects here.|You see here|You feel here")
         return $ if b
           then Just Floor   -- This can also actually be a wall or rock if
                             -- you are embedded in it but it'll get fixed
@@ -96,12 +96,11 @@ inferItemsBeingLookedAt _ = do
     matchf (limitRows [0] $ regex "You (see|feel) here (a |an |the )?(.+)( \\([0-9]+ aum\\))?\\.") >>= \case
       [_whole, _seefeel, _article, name, _weight] ->
         return $ Pile [nameToItem name]
-      _ ->
+      _ -> do
         -- Multi item case then
         matchf (limitRows [0] $ regex "Things that you feel here:|Things that you see here:") >>= \case
           Just dd -> itemInferLoop dd
           Nothing ->
-            -- This case shouldn't happen
             return NoPile
 
   itemInferLoop dd = do
