@@ -5,6 +5,7 @@
 
 module Bot.NetHack.AIEntry
   ( AIState()
+  , botConfig
   , emptyAIState
   , stepAIState )
   where
@@ -15,7 +16,6 @@ import Bot.NetHack.MonadAI
 import Bot.NetHack.InferWorldState
 import Bot.NetHack.WorldState
 import Control.Lens
-import Control.Monad
 import Control.Monad.Free
 import qualified Data.ByteString as B
 import Terminal.Screen
@@ -56,7 +56,7 @@ bot = do
   worldLoop emptyWorldState
  where
   worldLoop old_state = do
-    msgs <- consumeMessages
+    _ <- consumeMessages
     new_state <- inferWorldState old_state
     send " "
     worldLoop new_state

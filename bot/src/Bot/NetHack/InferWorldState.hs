@@ -6,14 +6,16 @@ module Bot.NetHack.InferWorldState
   where
 
 import Bot.NetHack.MonadAI
+import Bot.NetHack.ScreenPattern
 import Bot.NetHack.WorldState
 import Control.Lens hiding ( Level, levels )
 import Control.Monad.State.Strict
-import qualified Data.Array.IArray as A
 import qualified Data.Array.MArray as A
 import qualified Data.Array.ST as A
 import Data.Foldable
+import Data.Maybe
 import qualified Data.Set as S
+import qualified Data.Text as T
 import Terminal.Screen
 
 -- | Uses what is currently seen on the screen to infer and update bot's world
@@ -24,8 +26,6 @@ inferWorldState = execStateT $
 
 inferCurrentLevel :: MonadAI m => StateT WorldState m ()
 inferCurrentLevel = do
-  (st, _, _) <- currentScreen
-
   -- Does the level we are currently on "exist" (i.e. have we seen it before)?
   cl <- use currentLevel
   use (levels.at cl) >>= \case
@@ -39,6 +39,55 @@ inferCurrentLevel = do
 freshLevel :: MonadAI m => LevelIndex -> StateT WorldState m ()
 freshLevel li = levels.at li .= Just emptyLevel
 
+inferCurrentlyStandingSquare :: MonadAI m => Level -> StateT WorldState m Level
+inferCurrentlyStandingSquare lvl = do
+  (_, cx, cy) <- currentScreen
+  if isNothing $ join $ (lvl^?cells.ix (cx, cy).cellFeature)
+    then checkFloor cx cy
+    else return lvl
+ where
+  checkFloor cx cy = do
+    send ":"
+    thing <- matchf (limitRows [0] $ regex "There is (a |an )?(.+) here.")
+    what_is_that_thing <- case thing of
+      [_, _, description] -> return $ descriptionToLevelFeature description
+      _ -> do
+        b <- matchf (limitRows [0] $ regex "You see no objects here.|You feel no objects here.")
+        return $ if b
+          then Just Floor   -- This can also actually be a wall or rock if
+                            -- you are embedded in it but it'll get fixed
+                            -- when the player moves.
+          else Nothing
+
+    -- Update floor if we got a positive match
+    case what_is_that_thing of
+      Nothing -> return lvl
+      Just inferred_thing ->
+        return $ lvl & cells.ix (cx, cy).cellFeature .~ Just inferred_thing
+
+descriptionToLevelFeature :: T.Text -> Maybe LevelFeature
+descriptionToLevelFeature "staircase up" = Just Upstairs
+descriptionToLevelFeature "staircase down" = Just Downstairs
+descriptionToLevelFeature "fountain" = Just Fountain
+descriptionToLevelFeature "doorway" = Just Floor
+descriptionToLevelFeature "broken door" = Just Floor
+descriptionToLevelFeature "open door" = Just OpenedDoor
+descriptionToLevelFeature "molten lava" = Just Lava
+descriptionToLevelFeature "pool of water" = Just Water
+descriptionToLevelFeature "opulent throne" = Just Floor
+descriptionToLevelFeature "tree" = Just Wall
+descriptionToLevelFeature "hole" = Just Trap
+descriptionToLevelFeature "pit" = Just Trap
+descriptionToLevelFeature "web" = Just Trap
+descriptionToLevelFeature "ladder down" = Just Downstairs
+descriptionToLevelFeature "ladder up" = Just Upstairs
+descriptionToLevelFeature "grave" = Just Floor
+descriptionToLevelFeature "sink" = Just Floor
+
+descriptionToLevelFeature txt | T.isInfixOf "altar" txt = Just Altar
+descriptionToLevelFeature txt | T.isInfixOf "trap" txt = Just Trap
+descriptionToLevelFeature _ = Nothing
+
 inferLevel :: MonadAI m => Level -> StateT WorldState m Level
 inferLevel lvl = do
   (ss, cx, cy) <- currentScreen
@@ -50,7 +99,9 @@ inferLevel lvl = do
                     inferring cx cy sw sh statuses mutcells ss
                     return mutcells
 
-  return $ lvl & cells .~ new_cells
+  let updated_lvl = lvl & cells .~ new_cells
+
+  inferCurrentlyStandingSquare updated_lvl
  where
   inferring :: Int
             -> Int

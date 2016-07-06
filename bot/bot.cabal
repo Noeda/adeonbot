@@ -28,6 +28,7 @@ library
                       ,lens
                       ,mtl
                       ,process
+                      ,regex-tdfa
                       ,stm
                       ,terminal-emulator
                       ,text
