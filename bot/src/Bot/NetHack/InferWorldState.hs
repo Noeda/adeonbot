@@ -184,6 +184,9 @@ inferLevel lvl = do
           when (isItemSymbol (contents cell) (foregroundColor cell)) $ do
             old_cell <- A.readArray mutcells (column, row)
             let scell = show cell
+
+            -- Mark item pile dirty if its appearance has changed from last
+            -- time.
             when ((old_cell^.cellItemAppearanceLastTime) /= scell) $
               A.writeArray mutcells (column, row)
                 (old_cell & (cellItems .~ PileSeen) .
@@ -191,5 +194,8 @@ inferLevel lvl = do
 
         Just new_feature -> do
           old_cell <- A.readArray mutcells (column, row)
-          A.writeArray mutcells (column, row) (old_cell & cellFeature .~ Just new_feature)
+          A.writeArray mutcells (column, row)
+            (old_cell & (cellFeature .~ Just new_feature) .
+                        (cellItemAppearanceLastTime .~ "") .  -- Also clear item pile
+                        (cellItems .~ NoPile))
 
