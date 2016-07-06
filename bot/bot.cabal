@@ -13,13 +13,17 @@ library
   exposed-modules:     Bot.NetHack
                        Bot.NetHack.AIEntry
                        Bot.NetHack.Config
+                       Bot.NetHack.InferWorldState
                        Bot.NetHack.Messages
                        Bot.NetHack.MonadAI
                        Bot.NetHack.ScreenPattern
-  build-depends:       async
+                       Bot.NetHack.WorldState
+  build-depends:       array
+                      ,async
                       ,base >=4.7 && <5.0
                       ,bytestring
                       ,clock
+                      ,containers
                       ,free
                       ,lens
                       ,mtl

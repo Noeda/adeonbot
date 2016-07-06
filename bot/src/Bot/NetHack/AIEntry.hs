@@ -12,6 +12,8 @@ module Bot.NetHack.AIEntry
 import Bot.NetHack.Config
 import Bot.NetHack.Messages
 import Bot.NetHack.MonadAI
+import Bot.NetHack.InferWorldState
+import Bot.NetHack.WorldState
 import Control.Lens
 import Control.Monad
 import Control.Monad.Free
@@ -39,20 +41,23 @@ runAI screenstate w h aistate' ai = case ai of
   aistate = aistate' & nextAction .~ (return ())
 
 characterCreation :: MonadAI m => m Bool
-characterCreation = do
-  matchfirst
-    [ ("Shall I pick a character's", send "n")
-    , ("Pick a role or profession", send "v")
-    , ("Pick a race or species", send "d")
-    , ("Pick an alignment", send "l")
-    , ("Is this ok?", send "y")
-    , ("It is written in the Book of", send " ") ]
+characterCreation = matchfirst
+  [ ("Shall I pick a character's", send "n")
+  , ("Pick a role or profession", send "v")
+  , ("Pick a race or species", send "d")
+  , ("Pick an alignment", send "l")
+  , ("Is this ok?", send "y")
+  , ("It is written in the Book of", send " ") ]
 
 bot :: AI ()
 bot = do
   repeatUntilFalse characterCreation
 
-  forever $ do
+  worldLoop emptyWorldState
+ where
+  worldLoop old_state = do
     msgs <- consumeMessages
-    error (show msgs)
+    new_state <- inferWorldState old_state
+    send " "
+    worldLoop new_state
 

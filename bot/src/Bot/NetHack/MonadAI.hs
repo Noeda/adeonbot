@@ -16,6 +16,7 @@ module Bot.NetHack.MonadAI
 
 import Bot.NetHack.ScreenPattern
 import Control.Monad.Free
+import Control.Monad.State.Strict
 import qualified Data.ByteString as B
 import qualified Data.Text as T
 import Prelude hiding ( getLine )
@@ -37,9 +38,14 @@ instance MonadAI (Free AIF) where
   liftAI = id
   {-# INLINE liftAI #-}
 
+instance MonadAI m => MonadAI (StateT s m) where
+  liftAI action = lift $ liftAI action
+  {-# INLINE liftAI #-}
+
 send :: MonadAI m => B.ByteString -> m ()
 send bs = liftAI $ liftF $ Send bs ()
 
+-- | Returns current screen state and cursor coordinates.
 currentScreen :: MonadAI m => m (ScreenState, Int, Int)
 currentScreen = liftAI $ liftF $ GetCurrentScreenState (\ss x y -> (ss, x, y))
 

@@ -10,6 +10,7 @@ module Terminal.Screen
   , ScreenColor(..)
   , intensify
   , getLine
+  , getCell
   , ScreenState()
   , ScreenStateMut()
   , screenSize
@@ -297,4 +298,14 @@ toANSIOutput old_ss ss@(ScreenState { rawCells = cells }) = BB.toLazyByteString 
 
     loop_columns (x+w) y
 {-# INLINEABLE toANSIOutput #-}
+
+getCell :: Int -> Int -> ScreenState -> Cell
+getCell x y ss@(ScreenState cells) =
+  if x >= 0 && x <= sw-1 && y >= 0 && y <= sh-1
+    then cells A.! (x, y)
+    else Cell { contents = " "
+              , foregroundColor = White
+              , backgroundColor = Black }
+ where
+  (sw, sh) = screenSize ss
 
