@@ -124,7 +124,7 @@ inferLevel lvl = do
   inferCurrentlyStandingSquare updated_lvl
  where
   inferBoulders :: ScreenState -> S.Set (Int, Int)
-  inferBoulders ss = foldl' folding S.empty [(x, y) | x <- [0..sw-1], y <- [0..sh-3]]
+  inferBoulders ss = foldl' folding S.empty [(x, y) | x <- [0..sw-1], y <- [1..sh-3]]
    where
     (sw, sh) = screenSize ss
 
@@ -142,7 +142,7 @@ inferLevel lvl = do
             -> A.STArray s (Int, Int) LevelCell
             -> ScreenState
             -> ST s ()
-  inferring cx cy sw sh statuses mutcells ss = for_ [0..sw-1] $ \column -> for_ [0..sh-3] $ \row ->
+  inferring cx cy sw sh statuses mutcells ss = for_ [0..sw-1] $ \column -> for_ [1..sh-3] $ \row ->
     -- Don't infer anything at the spot player is standing
     unless (column == cx && row == cy) $ do
       let can_infer_stuff_next_to_player = (Blind `S.notMember` statuses) &&
