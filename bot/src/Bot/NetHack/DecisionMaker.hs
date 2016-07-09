@@ -35,6 +35,7 @@ decisionMaker = forever $ do
                pursue findExplorablePath <|>
                findClosedDoors <|>
                findLockedDoors <|>
+               findDownstairs <|>
                error "nothing to do")
 
 getCurrentLevel :: (Alternative m, Monad m) => WorldState -> m Level
@@ -68,6 +69,19 @@ al' :: (Alternative m, MonadAI m) => Maybe a -> m a
 al' = \case
   Nothing -> empty
   Just ok -> return ok
+
+findDownstairs :: (Alternative m, MonadWAI m)
+               => m ()
+findDownstairs = do
+  wstate <- askWorldState
+  lvl <- getCurrentLevel wstate
+  (_, cx, cy) <- currentScreen
+
+  if join (lvl^?cells.ix (cx, cy).cellFeature) == Just Downstairs
+    then send ">"
+    else findWayToFeatures Downstairs
+           (\d _ -> send d)
+           (\d _ -> send d)
 
 findClosedDoors :: (Alternative m, MonadWAI m)
                 => m ()

@@ -18,6 +18,7 @@ import Control.Monad.State.Strict
 import qualified Data.Array.MArray as A
 import qualified Data.Array.ST as A
 import Data.Foldable
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
@@ -31,17 +32,88 @@ inferWorldState :: MonadAI m => WorldState -> m WorldState
 inferWorldState = execStateT $
   inferCurrentLevel
 
+inferLevelIndex :: MonadAI m => StateT WorldState m ()
+inferLevelIndex = do
+  cl <- use currentLevel
+  expected_description <- use (levelMeta.at cl._Just.levelDescription)
+
+  last_line <- getScreenLine 23
+
+  let lvl_description = T.strip $ fst $ T.breakOn "$:" last_line
+  if lvl_description == expected_description
+    then return ()
+    else do send "#overview\n"
+            lookForYouAreHere lvl_description
+ where
+  lookForYouAreHere lvl_description = do
+    -- Use the --More-- prompt to figure the column where branches are
+    -- listed.
+    Just dd <- matchf "--More--"
+
+    let branch_column = if x dd == 1
+                          then 0
+                          else x dd
+
+        branchFolder branchmap row = do line <- getScreenLine' row branch_column
+                                        return $ if T.head line /= ' '
+                                          then M.insert row (T.strip line) branchmap
+                                          else branchmap
+
+    -- We don't actually look at the level names at all. Just branch
+    -- names and where "You are here" sign is.
+    -- This builds a map of branch names on the screen, indexed by row
+    branch_names <- foldlM branchFolder M.empty [0..y dd-1]
+
+    -- Look for the "You are here" sign.
+    matchf "<- You are here." >>= \case
+      -- Maybe on next page?
+      Nothing -> do send " "
+                    lookForYouAreHere lvl_description
+      Just you_are_here_row -> do
+        let Just (_, branchname) = M.lookupLE (y you_are_here_row) branch_names
+
+        -- Do we know this level?
+        levelmetas <- use levelMeta
+
+        let looper [] = return False
+            looper ((lvlindex, meta):rest) = if meta^.levelDescription == lvl_description &&
+                                                meta^.branchName == branchname
+                                               then do currentLevel .= lvlindex
+                                                       return True
+                                               else looper rest
+
+        found_level <- looper (IM.assocs levelmetas)
+        unless found_level $ do
+          let new_index = if IM.null levelmetas
+                            then 1
+                            else let (largest_key, _) = IM.findMax levelmetas
+                                  in largest_key+1
+
+          levelMeta.at new_index .= Just (LevelMeta { _levelDescription = lvl_description
+                                                    , _branchName = branchname })
+          levels.at new_index .= Just emptyLevel
+          currentLevel .= new_index
+
+        -- Dismiss --More--s
+        dismissMores
+
+  dismissMores = do
+    b <- matchf "--More--"
+    when b $ do
+      send " "
+      dismissMores
+
 inferCurrentLevel :: MonadAI m => StateT WorldState m ()
 inferCurrentLevel = do
+  inferLevelIndex
+
   -- Does the level we are currently on "exist" (i.e. have we seen it before)?
   cl <- use currentLevel
   use (levels.at cl) >>= \case
-    Nothing -> do
-      freshLevel cl  -- make a new fresh level, then try again
-      inferCurrentLevel
     Just lvl -> do
       updated_lvl <- inferLevel lvl
       levels.at cl .= Just updated_lvl
+    _ -> error "Impossible"
 
 freshLevel :: MonadAI m => LevelIndex -> StateT WorldState m ()
 freshLevel li = levels.at li .= Just emptyLevel

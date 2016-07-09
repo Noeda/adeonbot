@@ -61,7 +61,7 @@ botEntry config getNextStatus refresh send = aiLoop (emptyAIState config)
 
   waitUntilCooldown = do
     now <- toNanoSecs <$> getTime Monotonic
-    let accepted_time = now - 100000000 -- 100ms
+    let accepted_time = now - 40000000 -- 40ms
 
     maybestatus <- atomically $ do
       st@(_, _, _, timing) <- getNextStatus
@@ -71,7 +71,7 @@ botEntry config getNextStatus refresh send = aiLoop (emptyAIState config)
 
     case maybestatus of
       Nothing -> do
-        threadDelay 30000 -- 30ms
+        threadDelay 10000 -- 10ms
         waitUntilCooldown
       Just status -> return status
 

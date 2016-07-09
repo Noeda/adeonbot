@@ -7,9 +7,13 @@ module Bot.NetHack.WorldState
   , LevelIndex
   , emptyWorldState
   , levels
+  , levelMeta
   , statuses
   , currentLevel
   , turn
+  , LevelMeta(..)
+  , levelDescription
+  , branchName
   , Level(..)
   , emptyLevel
   , cells
@@ -37,6 +41,7 @@ import Data.Data
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.Text as T
 import GHC.Generics
 
 type LevelIndex = Int
@@ -47,9 +52,15 @@ type LevelIndex = Int
 -- saved.
 data WorldState = WorldState
   { _levels       :: !(IM.IntMap Level)
+  , _levelMeta    :: !(IM.IntMap LevelMeta)
   , _currentLevel :: !LevelIndex
   , _statuses     :: !(S.Set Status)
   , _turn         :: !Int }
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+
+data LevelMeta = LevelMeta
+  { _levelDescription :: !T.Text
+  , _branchName       :: !T.Text }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 data Level = Level
@@ -134,10 +145,12 @@ makeLenses ''MonsterImage
 makeLenses ''Level
 makeLenses ''LevelCell
 makeLenses ''WorldState
+makeLenses ''LevelMeta
 
 emptyWorldState :: WorldState
 emptyWorldState = WorldState
   { _levels = IM.empty
+  , _levelMeta = IM.empty
   , _statuses = S.empty
   , _currentLevel = 1
   , _turn = 1 }

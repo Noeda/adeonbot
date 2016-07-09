@@ -21,6 +21,7 @@ module Bot.NetHack.MonadAI
   , matchfirst
   , repeatUntilFalse
   , getScreenLine
+  , getScreenLine'
   , module Control.Applicative )
   where
 
@@ -99,6 +100,11 @@ getScreenLine :: MonadAI m => Int -> m T.Text
 getScreenLine row = do
   (ss, _, _) <- currentScreen
   return $ fst $ getLine row ss
+
+getScreenLine' :: MonadAI m => Int -> Int -> m T.Text
+getScreenLine' row column = do
+  (ss, _, _) <- currentScreen
+  return $ fst $ getLine' row column ss
 
 repeatUntilFalse :: Monad m => m Bool -> m ()
 repeatUntilFalse thing = do
