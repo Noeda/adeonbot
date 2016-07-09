@@ -15,10 +15,8 @@ import qualified Data.Text as T
 consumeMessages :: MonadAI m => m [T.Text]
 consumeMessages = do
   skipThingsThatAreHere
-  msgs1 <- pluckMessages
-  skipThingsThatAreHere
-  msgs2 <- pluckMessages
-  return $ msgs1 <> msgs2
+  msgs <- pluckMessages
+  return $ filter (not . T.null) msgs
 
 skipThingsThatAreHere :: MonadAI m => m ()
 skipThingsThatAreHere = do

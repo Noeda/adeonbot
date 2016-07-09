@@ -12,7 +12,9 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Bot.NetHack
                        Bot.NetHack.AIEntry
+                       Bot.NetHack.BFS
                        Bot.NetHack.Config
+                       Bot.NetHack.DecisionMaker
                        Bot.NetHack.InferWorldState
                        Bot.NetHack.Messages
                        Bot.NetHack.MonadAI

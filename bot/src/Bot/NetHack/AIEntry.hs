@@ -11,12 +11,15 @@ module Bot.NetHack.AIEntry
   where
 
 import Bot.NetHack.Config
+import Bot.NetHack.DecisionMaker
 import Bot.NetHack.Messages
 import Bot.NetHack.MonadAI
 import Bot.NetHack.InferWorldState
 import Bot.NetHack.WorldState
 import Control.Lens
-import Control.Monad.Free
+import Control.Monad.State.Strict
+import Control.Monad.Trans.Free
+import Control.Monad.Trans.Free.Church
 import qualified Data.ByteString as B
 import Terminal.Screen
 
@@ -30,13 +33,14 @@ emptyAIState bc = AIState { _botConfig = bc
                           , _nextAction = bot }
 
 stepAIState :: ScreenState -> Int -> Int -> AIState -> (AIState, B.ByteString)
-stepAIState screenstate x y aistate = runAI screenstate x y aistate (aistate^.nextAction)
+stepAIState screenstate x y aistate =
+  runAI screenstate x y aistate (fromFT $ aistate^.nextAction)
 
-runAI :: ScreenState -> Int -> Int -> AIState -> AI () -> (AIState, B.ByteString)
-runAI screenstate w h aistate' ai = case ai of
+runAI :: ScreenState -> Int -> Int -> AIState -> (FreeT AIF Identity ()) -> (AIState, B.ByteString)
+runAI screenstate w h aistate' (FreeT (Identity ai)) = case ai of
   Pure () -> (aistate, B.empty)
   Free (GetCurrentScreenState fun) -> runAI screenstate w h aistate (fun screenstate w h)
-  Free (Send bs next) -> (aistate & nextAction .~ next, bs)
+  Free (Send bs next) -> (aistate & nextAction .~ (toFT next), bs)
  where
   aistate = aistate' & nextAction .~ (return ())
 
@@ -53,11 +57,22 @@ bot :: AI ()
 bot = do
   repeatUntilFalse characterCreation
 
-  worldLoop emptyWorldState
+  worldLoop emptyWorldState decisionMaker
  where
-  worldLoop old_state = do
-    _ <- consumeMessages
+  worldLoop old_state maker = do
+    msgs <- consumeMessages
     new_state <- inferWorldState old_state
-    send " "
-    worldLoop new_state
+
+    exhaust new_state msgs (fromFT $ runWAI maker)
+   where
+    exhaust new_state msgs (FreeT maker) = do
+      (item, (new_world, _)) <- runStateT maker (new_state, msgs)
+      case item of
+        Pure () -> error "decisionMaker ran out."
+        Free (Send bs next) -> do
+          send bs
+          worldLoop new_world (toWAI $ toFT next)
+        Free (GetCurrentScreenState fun) -> do
+          (ss, cx, cy) <- currentScreen
+          exhaust new_world msgs (fun ss cx cy)
 

@@ -16,11 +16,15 @@ module Bot.NetHack.WorldState
   , boulders
   , monsters
   , LevelFeature(..)
+  , isPassable
   , LevelCell(..)
   , cellFeature
   , cellItems
   , cellItemAppearanceLastTime
   , Monster(..)
+  , MonsterImage(..)
+  , monster
+  , monsterAppearance
   , Status(..)
   , ItemPileImage(..)
   , ItemPile
@@ -51,7 +55,7 @@ data WorldState = WorldState
 data Level = Level
   { _cells    :: !(A.Array (Int, Int) LevelCell)
   , _boulders :: !(S.Set (Int, Int))
-  , _monsters :: !(M.Map (Int, Int) Monster) }
+  , _monsters :: !(M.Map (Int, Int) MonsterImage) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 data LevelCell = LevelCell
@@ -67,12 +71,30 @@ data LevelFeature
   | Upstairs
   | Fountain               -- For all your quaffing needs
   | ClosedDoor
+  | LockedDoor
   | OpenedDoor
   | Altar
   | Trap
   | Lava
   | Water
+  | InkyBlackness
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
+-- | Can I walk on it?
+isPassable :: LevelFeature -> Bool
+isPassable Floor = True
+isPassable Downstairs = True
+isPassable Upstairs = True
+isPassable ClosedDoor = False
+isPassable OpenedDoor = True
+isPassable Altar = True
+isPassable Trap = False
+isPassable Lava = False
+isPassable Water = False
+isPassable Wall = False
+isPassable Fountain = True
+isPassable LockedDoor = False
+isPassable InkyBlackness = False
 
 data Monster
   = AmbiguousMonster       -- We see a monster here but don't know what type
@@ -101,8 +123,14 @@ data Item
   = Weapon !Int    -- Weapon and its damage
   | Armor !Int     -- Armor and the AC it gives
   | Food           -- Safe food item
+  | StrangeItem    -- No idea what this item is.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
+data MonsterImage = MonsterImage
+  { _monster :: !Monster
+  , _monsterAppearance :: String }
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+makeLenses ''MonsterImage
 makeLenses ''Level
 makeLenses ''LevelCell
 makeLenses ''WorldState

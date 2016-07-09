@@ -1,8 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiWayIf #-}
 
 module Bot.NetHack.InferWorldState
-  ( inferWorldState )
+  ( inferWorldState
+  , inferSquare
+  , levelSquares )
   where
 
 import Bot.NetHack.MonadAI
@@ -13,6 +18,7 @@ import Control.Monad.State.Strict
 import qualified Data.Array.MArray as A
 import qualified Data.Array.ST as A
 import Data.Foldable
+import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
 import qualified Data.Set as S
@@ -95,10 +101,11 @@ inferItemsBeingLookedAt _ = do
     -- Single item case?
     matchf (limitRows [0] $ regex "You (see|feel) here (a |an |the )?(.+)( \\([0-9]+ aum\\))?\\.") >>= \case
       [_whole, _seefeel, _article, name, _weight] ->
-        return $ Pile [nameToItem name]
+        let i = nameToItem name
+         in i `seq` return $ Pile [nameToItem name]
       _ -> do
         -- Multi item case then
-        matchf (limitRows [0] $ regex "Things that you feel here:|Things that you see here:") >>= \case
+        matchf (limitRows [0] $ regex "Things that you feel here:|Things that are here:") >>= \case
           Just dd -> itemInferLoop dd
           Nothing ->
             return NoPile
@@ -135,7 +142,7 @@ inferItemsBeingLookedAt _ = do
         return NoPile
 
 nameToItem :: T.Text -> Item
-nameToItem = error . show
+nameToItem _ = StrangeItem
 
 descriptionToLevelFeature :: T.Text -> Maybe LevelFeature
 descriptionToLevelFeature "staircase up" = Just Upstairs
@@ -163,6 +170,7 @@ descriptionToLevelFeature _ = Nothing
 isItemSymbol :: T.Text -> ScreenColor -> Bool
 isItemSymbol "(" _ = True
 isItemSymbol ")" _ = True
+isItemSymbol "[" _ = True
 isItemSymbol "\"" fcolor | fcolor == Cyan = True
 isItemSymbol "!" _ = True
 isItemSymbol "?" _ = True
@@ -190,8 +198,11 @@ inferLevel lvl = do
 
       new_boulders = inferBoulders ss
 
+      new_monsters = inferMonsters ss (lvl^.monsters)
+
   let updated_lvl = lvl & (cells .~ new_cells) .
-                          (boulders .~ new_boulders)
+                          (boulders .~ new_boulders) .
+                          (monsters .~ new_monsters)
 
   inferCurrentlyStandingSquare updated_lvl
  where
@@ -217,6 +228,7 @@ inferLevel lvl = do
   inferring cx cy sw sh statuses mutcells ss = for_ [0..sw-1] $ \column -> for_ [1..sh-3] $ \row ->
     -- Don't infer anything at the spot player is standing
     unless (column == cx && row == cy) $ do
+      old_cell <- A.readArray mutcells (column, row)
       let can_infer_stuff_next_to_player = (Blind `S.notMember` statuses) &&
                                            (abs (cx-column) <= 1 && abs (cy-row) <= 1)
           cell = getCell column row ss
@@ -232,8 +244,9 @@ inferLevel lvl = do
             "#" | fcolor == Cyan -> Just Wall
             "#" | fcolor == Yellow -> Just Wall
             "#" -> Just Floor
-            "~" | fcolor == LightGray -> Just Floor
-            "~" | fcolor == Yellow -> Just ClosedDoor
+            "7" | fcolor == LightGray -> Just Floor
+            "7" | fcolor == Yellow && old_cell^.cellFeature /= Just LockedDoor
+                  -> Just ClosedDoor
             "-" | fcolor == Yellow -> Just OpenedDoor
             "|" | fcolor == Yellow -> Just OpenedDoor
             "-" | fcolor == LightGray -> Just Wall
@@ -247,6 +260,7 @@ inferLevel lvl = do
             "}" | fcolor == Blue -> Just Water
             "}" | fcolor == Red -> Just Lava
             " " | can_infer_stuff_next_to_player -> Just Wall
+            " " | old_cell^.cellFeature /= Just Wall -> Just InkyBlackness
             _ -> Nothing
 
       case inferred of
@@ -254,7 +268,6 @@ inferLevel lvl = do
           -- If we can't infer any new information then maybe we can infer
           -- something about items?
           when (isItemSymbol (contents cell) (foregroundColor cell)) $ do
-            old_cell <- A.readArray mutcells (column, row)
             let scell = show cell
 
             -- Mark item pile dirty if its appearance has changed from last
@@ -270,4 +283,67 @@ inferLevel lvl = do
             (old_cell & (cellFeature .~ Just new_feature) .
                         (cellItemAppearanceLastTime .~ "") .  -- Also clear item pile
                         (cellItems .~ NoPile))
+
+levelSquares :: [(Int, Int)]
+levelSquares = [ (x, y) | x <- [0..79], y <- [1..21] ]
+
+-- Given screenstate and old state of monsters, update it and return new
+-- state of monsters.
+inferMonsters :: ScreenState -> M.Map (Int, Int) MonsterImage -> M.Map (Int, Int) MonsterImage
+inferMonsters ss monsters =
+  -- Collect all squares that look like monsters
+  let monster_squares = filter (\(x, y) -> looksLikeMonster $ getCell x y ss) levelSquares
+   in foldl' foldMonsters M.empty monster_squares
+ where
+  foldMonsters new_monsters (mx, my) =
+    let cell@Cell{..} = getCell mx my ss
+        retmon x = M.insert (mx, my)
+                            (MonsterImage { _monster = x
+                                          , _monsterAppearance = show cell })
+                            new_monsters
+
+        -- If identical looking monster was next to this one (or at the same
+        -- place) and no other monster is next to it, assume this is the same
+        -- monster
+        monsterMovedMaybe def =
+          let candidates = M.fromList $ concat $ flip fmap [(x, y) | x <- [mx-1..mx+1], y <- [my-1..my+1]] $ \(x, y) ->
+                             case M.lookup (x, y) monsters of
+                               Nothing -> []
+                               Just (MonsterImage m appearance) ->
+                                 if appearance == show cell
+                                   then [((x, y), m)]
+                                   else []
+          in if M.size candidates == 1 -- We want unambiguous candidate so only copy the monster if there is one single candidate
+               then head $ M.elems candidates
+               else def
+
+     in if | foregroundColor == Blue && contents == "e"
+             -> retmon FloatingEyeMonster
+           | foregroundColor == Magenta && contents == "h"
+             -> retmon $ monsterMovedMaybe AmbiguousMonster
+           | otherwise -> retmon UnremarkableMonster
+
+
+looksLikeMonster :: Cell -> Bool
+looksLikeMonster (Cell{..}) | T.length contents /= 1 = False
+looksLikeMonster (Cell{..}) = case T.head contents of
+  -- statues
+  _ | foregroundColor == White && backgroundColor == Black -> False
+
+  -- rest
+  ch | ch >= 'a' && ch <= 'z' -> True
+  ch | ch >= 'A' && ch <= 'Z' -> True
+  '&' -> True
+  '\'' -> True
+  ':' -> True
+  ';' -> True
+  '@' -> True
+  '~' -> True
+  ']' -> True
+  _ -> False
+
+inferSquare :: MonadState WorldState m => (Int, Int) -> (LevelFeature -> LevelFeature) -> m ()
+inferSquare pos modifier = do
+  cl <- get
+  put $ cl & levels.at (cl^.currentLevel)._Just.cells.ix pos.cellFeature._Just %~ modifier
 
