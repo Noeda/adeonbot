@@ -13,6 +13,7 @@ module Bot.NetHack.MonadAI
   , runWAI
   , toWAI
   , AbortAI()
+  , MonadAnswerer(..)
   , runAbortAI
   , runAbortAI_
   , MonadAI(..)
@@ -28,6 +29,7 @@ module Bot.NetHack.MonadAI
 import Bot.NetHack.ScreenPattern
 import Bot.NetHack.WorldState
 import Control.Applicative
+import qualified Data.IntMap.Strict as IM
 import Control.Lens
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Except
@@ -40,6 +42,7 @@ import Terminal.Screen
 data AIF f
   = GetCurrentScreenState !(ScreenState -> Int -> Int -> f)
   | Send !B.ByteString f
+  | SendRaw !B.ByteString f  -- Used by WAI, otherwise identically interpreted as Send
   deriving ( Functor )
 
 type AI a = AIT Identity a
@@ -61,10 +64,14 @@ instance MonadAI m => MonadAI (StateT s m) where
 newtype AbortAI m a = AbortAI (ExceptT () m a)
   deriving ( Functor, Applicative, Monad )
 
+instance MonadTrans AbortAI where
+  lift action = AbortAI $ lift action
+
 instance MonadWAI m => MonadWAI (AbortAI m) where
   askWorldState = AbortAI $ lift $ askWorldState
   askMessages = AbortAI $ lift $ askMessages
   modWorld fun = AbortAI $ lift $ modWorld fun
+  sendRaw bs = AbortAI $ lift $ sendRaw bs
 
 instance MonadAI m => MonadAI (AbortAI m) where
   send bs = AbortAI $ lift $ send bs
@@ -113,32 +120,50 @@ repeatUntilFalse thing = do
     then repeatUntilFalse thing
     else return ()
 
-newtype WAI m a = WAI (FT AIF (StateT (WorldState, [T.Text]) m) a)
+newtype WAI m a = WAI (FT AIF (StateT (WorldState, [T.Text], IM.IntMap (T.Text, WAI m ())) m) a)
   deriving ( Functor, Applicative, Monad )
 
 class MonadAI m => MonadWAI m where
   askWorldState :: m WorldState
   askMessages :: m [T.Text]
   modWorld :: (WorldState -> WorldState) -> m ()
+  sendRaw :: B.ByteString -> m ()
 
 instance Monad m => MonadWAI (WAI m) where
   askWorldState = WAI $ lift $ do
-    (w, _) <- get
+    (w, _, _) <- get
     return w
 
   askMessages = WAI $ lift $ do
-    (_, m) <- get
+    (_, m, _) <- get
     return m
 
   modWorld fun = WAI $ lift $ _1 %= fun
+
+  sendRaw bs = WAI $ liftF $ SendRaw bs ()
+
+class MonadAnswerer m where
+  withAnswerer :: T.Text -> m () -> m a -> m a
+
+instance Monad m => MonadAnswerer (WAI m) where
+  withAnswerer matchtext answermachine (WAI action) = WAI $ do
+    (_, _, answerers) <- get
+    let idx = if IM.null answerers
+                then 0
+                else fst (IM.findMax answerers) + 1
+
+    _3 %= IM.insert idx (matchtext, answermachine)
+    result <- action
+    _3 %= IM.delete idx
+    return result
 
 instance MonadAI (WAI m) where
   send bs = WAI $ liftF $ Send bs ()
   currentScreen = WAI $ liftF $ GetCurrentScreenState (\ss x y -> (ss, x, y))
 
-runWAI :: MonadAI m => WAI m a -> FT AIF (StateT (WorldState, [T.Text]) m) a
+runWAI :: MonadAI m => WAI m a -> FT AIF (StateT (WorldState, [T.Text], IM.IntMap (T.Text, WAI m ())) m) a
 runWAI (WAI ff) = ff
 
-toWAI :: FT AIF (StateT (WorldState, [T.Text]) m) a -> WAI m a
+toWAI :: FT AIF (StateT (WorldState, [T.Text], IM.IntMap (T.Text, WAI m ())) m) a -> WAI m a
 toWAI = WAI
 

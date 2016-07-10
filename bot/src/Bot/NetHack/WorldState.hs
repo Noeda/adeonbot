@@ -10,11 +10,14 @@ module Bot.NetHack.WorldState
   , levelMeta
   , statuses
   , currentLevel
+  , inventory
+  , inventoryDirty
   , turn
   , LevelMeta(..)
   , levelDescription
   , branchName
   , Level(..)
+  , hasStatue
   , emptyLevel
   , cells
   , boulders
@@ -27,6 +30,7 @@ module Bot.NetHack.WorldState
   , cellItemAppearanceLastTime
   , Monster(..)
   , MonsterImage(..)
+  , isPeaceful
   , monster
   , monsterAppearance
   , Status(..)
@@ -40,6 +44,7 @@ import qualified Data.Array.IArray as A
 import Data.Data
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
+import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Text as T
 import GHC.Generics
@@ -51,11 +56,13 @@ type LevelIndex = Int
 -- Kept in easily serializable form so bot's view of the world can be easily
 -- saved.
 data WorldState = WorldState
-  { _levels       :: !(IM.IntMap Level)
-  , _levelMeta    :: !(IM.IntMap LevelMeta)
-  , _currentLevel :: !LevelIndex
-  , _statuses     :: !(S.Set Status)
-  , _turn         :: !Int }
+  { _levels         :: !(IM.IntMap Level)
+  , _levelMeta      :: !(IM.IntMap LevelMeta)
+  , _currentLevel   :: !LevelIndex
+  , _statuses       :: !(S.Set Status)
+  , _inventory      :: ![Item]
+  , _inventoryDirty :: !Bool
+  , _turn           :: !Int }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 data LevelMeta = LevelMeta
@@ -134,11 +141,13 @@ data Item
   = Weapon !Int    -- Weapon and its damage
   | Armor !Int     -- Armor and the AC it gives
   | Food           -- Safe food item
+  | Statue
   | StrangeItem    -- No idea what this item is.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 data MonsterImage = MonsterImage
   { _monster :: !Monster
+  , _isPeaceful :: !Bool
   , _monsterAppearance :: String }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 makeLenses ''MonsterImage
@@ -153,6 +162,8 @@ emptyWorldState = WorldState
   , _levelMeta = IM.empty
   , _statuses = S.empty
   , _currentLevel = 1
+  , _inventory = []
+  , _inventoryDirty = True
   , _turn = 1 }
 
 emptyLevelCell :: LevelCell
@@ -166,4 +177,11 @@ emptyLevel = Level
   { _cells = A.listArray ((0, 0), (79, 21)) (repeat emptyLevelCell)
   , _boulders = S.empty
   , _monsters = M.empty }
+
+hasStatue :: Level -> (Int, Int) -> Bool
+hasStatue lvl pos = fromMaybe False $ do
+  itemimage <- lvl^?cells.ix pos.cellItems
+  return $ case itemimage of
+    Pile items -> any (== Statue) items
+    _ -> False
 

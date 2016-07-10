@@ -8,9 +8,9 @@ module Bot.NetHack.DecisionMaker
   where
 
 import Bot.NetHack.BFS
+import Bot.NetHack.InferWorldState
 import Bot.NetHack.MonadAI
 import Bot.NetHack.WorldState
-import Bot.NetHack.InferWorldState ( levelSquares, inferSquare )
 import Control.Lens hiding ( Level, levels )
 import Control.Monad
 import Control.Monad.State.Strict
@@ -28,15 +28,20 @@ decisionMaker = forever $ do
                     case path of
                       (p:_) -> case diffToDir (cx, cy) p of
                         Nothing -> empty
-                        Just d -> send d
+                        Just d ->
+                          lift $ withAnswerer "Really attack"
+                            ((modWorld (execState $ inferPeaceful p)) >> send "n")
+                            (send d)
                       _ -> empty
 
-  runAbortAI_ (pursue findMonsterKill <|>
-               pursue findExplorablePath <|>
-               findClosedDoors <|>
-               findLockedDoors <|>
-               findDownstairs <|>
-               error "nothing to do")
+  withAnswerer "Call a"
+    (send "\n") $
+    runAbortAI_ (pursue findMonsterKill <|>
+                 pursue findExplorablePath <|>
+                 findClosedDoors <|>
+                 findLockedDoors <|>
+                 findDownstairs <|>
+                 error "nothing to do")
 
 getCurrentLevel :: (Alternative m, Monad m) => WorldState -> m Level
 getCurrentLevel wstate =
@@ -136,7 +141,7 @@ findMonsterKill = do
   (_, cx, cy) <- currentScreen
   lvl <- getCurrentLevel wstate
 
-  let mset = M.keysSet (lvl^.monsters)
+  let mset = M.keysSet $ M.filter (\m -> m^.isPeaceful == False) $ (lvl^.monsters)
    in al' $
       levelSearch (cx, cy)
                   (\goal _ -> S.member goal mset && goal /= (cx, cy))
@@ -173,7 +178,10 @@ levelSearch start_pos is_goal level =
   get_neighbours (x, y) =
     let lst1 = [ (nx, ny) | nx <- [x-1..x+1], ny <- [y-1..y+1],
                   (nx /= x || ny /= y) &&
-                   (fmap isPassable (join $ level^?cells.ix (nx, ny).cellFeature) == Just True ||
+
+                   ((fmap isPassable (join $ level^?cells.ix (nx, ny).cellFeature) == Just True &&
+                     join (level^?monsters.at (nx, ny)) == Nothing) ||
+
                     is_goal (nx, ny) Nothing) ]
 
         -- Filter diagonals when entering an open door

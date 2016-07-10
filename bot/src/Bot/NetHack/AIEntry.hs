@@ -21,6 +21,7 @@ import Control.Monad.State.Strict
 import Control.Monad.Trans.Free
 import Control.Monad.Trans.Free.Church
 import qualified Data.ByteString as B
+import qualified Data.IntMap.Strict as IM
 import Terminal.Screen
 
 data AIState = AIState
@@ -41,6 +42,7 @@ runAI screenstate w h aistate' (FreeT (Identity ai)) = case ai of
   Pure () -> (aistate, B.empty)
   Free (GetCurrentScreenState fun) -> runAI screenstate w h aistate (fun screenstate w h)
   Free (Send bs next) -> (aistate & nextAction .~ (toFT next), bs)
+  Free (SendRaw bs next) -> (aistate & nextAction .~ (toFT next), bs)
  where
   aistate = aistate' & nextAction .~ (return ())
 
@@ -57,22 +59,39 @@ bot :: AI ()
 bot = do
   repeatUntilFalse characterCreation
 
-  worldLoop emptyWorldState decisionMaker
+  worldLoop emptyWorldState IM.empty decisionMaker
  where
-  worldLoop old_state maker = do
-    msgs <- consumeMessages
-    new_state <- inferWorldState old_state
+  worldLoop old_state answermap maker = do
+    (new_state1, msgs) <- exhaustMessages old_state (fromFT $ runWAI $ consumeMessages answermap)
+    new_state2 <- inferWorldState msgs new_state1
 
-    exhaust new_state msgs (fromFT $ runWAI maker)
+    exhaust new_state2 msgs answermap (fromFT $ runWAI maker)
    where
-    exhaust new_state msgs (FreeT maker) = do
-      (item, (new_world, _)) <- runStateT maker (new_state, msgs)
+    exhaustMessages new_state (FreeT maker) = do
+      (item, (new_state, _, _)) <- runStateT maker (new_state, [], IM.empty)
       case item of
-        Pure () -> error "decisionMaker ran out."
+        Pure msgs -> return (new_state, msgs)
+        Free (SendRaw bs next) -> do
+          send bs
+          exhaustMessages new_state next
         Free (Send bs next) -> do
           send bs
-          worldLoop new_world (toWAI $ toFT next)
+          exhaustMessages new_state next
         Free (GetCurrentScreenState fun) -> do
           (ss, cx, cy) <- currentScreen
-          exhaust new_world msgs (fun ss cx cy)
+          exhaustMessages new_state (fun ss cx cy)
+
+    exhaust new_state msgs answermap (FreeT maker) = do
+      (item, (new_world, _, new_answermap)) <- runStateT maker (new_state, msgs, answermap)
+      case item of
+        Pure () -> error "decisionMaker ran out."
+        Free (SendRaw bs next) -> do
+          send bs
+          exhaust new_state msgs new_answermap next
+        Free (Send bs next) -> do
+          send bs
+          worldLoop new_world new_answermap (toWAI $ toFT next)
+        Free (GetCurrentScreenState fun) -> do
+          (ss, cx, cy) <- currentScreen
+          exhaust new_world msgs new_answermap (fun ss cx cy)
 

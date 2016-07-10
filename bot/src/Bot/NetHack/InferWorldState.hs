@@ -7,6 +7,7 @@
 module Bot.NetHack.InferWorldState
   ( inferWorldState
   , inferSquare
+  , inferPeaceful
   , levelSquares )
   where
 
@@ -24,13 +25,14 @@ import Data.Maybe
 import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Data.Traversable ( for )
 import Terminal.Screen
 
 -- | Uses what is currently seen on the screen to infer and update bot's world
 -- state (see `WorldState`).
-inferWorldState :: MonadAI m => WorldState -> m WorldState
-inferWorldState = execStateT $
-  inferCurrentLevel
+inferWorldState :: MonadAI m => [T.Text] -> WorldState -> m WorldState
+inferWorldState messages = execStateT $
+  inferCurrentLevel messages
 
 inferLevelIndex :: MonadAI m => StateT WorldState m ()
 inferLevelIndex = do
@@ -103,9 +105,57 @@ inferLevelIndex = do
       send " "
       dismissMores
 
-inferCurrentLevel :: MonadAI m => StateT WorldState m ()
-inferCurrentLevel = do
+inferInventory :: MonadAI m => [T.Text] -> StateT WorldState m ()
+inferInventory messages = do
+  let msgcheck m = any (T.isInfixOf m) messages
+
+  when (msgcheck "boils and explodes" ||
+        msgcheck "freezes and shatters" ||
+        msgcheck "catches fire and burns" ||
+        msgcheck "turns to dust" ||
+        msgcheck "breaks apart and" ||
+        msgcheck "steals" ||
+        msgcheck "turn into" ||
+        msgcheck "attracted to" ||
+        msgcheck "stands still while" ||
+        msgcheck "no gold" ||
+        msgcheck "zap") $
+    inventoryDirty .= True
+
+  inventory_is_dirty <- use inventoryDirty
+  when inventory_is_dirty $ do
+    inventoryDirty .= False
+
+    send "i"
+    matchf (limitRows [0] "Not carrying anything.") >>= \case
+      True -> inventory .= []
+      False -> do
+        inv <- exhaustInventory
+        inventory .= inv
+ where
+  exhaustInventory = do
+    bottom_item <- matchf (regex "([0-9]+ of [0-9]+)|\\(end\\)")
+    case bottom_item of
+      Nothing -> return []
+      Just dd -> do
+        items <- fmap catMaybes $ for [0..y dd-1] $ \row -> do
+          item_line <- T.strip <$> getScreenLine' row (x dd)
+          return $
+            if T.length item_line >= 5 &&
+               T.index item_line 1 == ' ' &&
+               T.index item_line 2 == '-' &&
+               T.index item_line 3 == ' '
+              then Just $ nameToItem (T.drop 4 item_line)
+              else Nothing
+        send " "
+        (items <>) <$> exhaustInventory
+
+
+inferCurrentLevel :: MonadAI m => [T.Text] -> StateT WorldState m ()
+inferCurrentLevel messages = do
   inferLevelIndex
+
+  inferInventory messages
 
   -- Does the level we are currently on "exist" (i.e. have we seen it before)?
   cl <- use currentLevel
@@ -114,9 +164,6 @@ inferCurrentLevel = do
       updated_lvl <- inferLevel lvl
       levels.at cl .= Just updated_lvl
     _ -> error "Impossible"
-
-freshLevel :: MonadAI m => LevelIndex -> StateT WorldState m ()
-freshLevel li = levels.at li .= Just emptyLevel
 
 inferCurrentlyStandingSquare :: MonadAI m => Level -> StateT WorldState m Level
 inferCurrentlyStandingSquare lvl = do
@@ -214,6 +261,7 @@ inferItemsBeingLookedAt _ = do
         return NoPile
 
 nameToItem :: T.Text -> Item
+nameToItem txt | T.isInfixOf "statue of" txt = Statue
 nameToItem _ = StrangeItem
 
 descriptionToLevelFeature :: T.Text -> Maybe LevelFeature
@@ -255,6 +303,7 @@ isItemSymbol "$" _ = True
 isItemSymbol "%" _ = True
 isItemSymbol "0" fcolor | fcolor == Cyan = True
 isItemSymbol "_" fcolor | fcolor == Cyan = True
+isItemSymbol ch fcolor | T.length ch == 1 && fcolor == White && isMonsterSymbol (T.head ch) = True
 isItemSymbol _ _ = False
 
 inferLevel :: MonadAI m => Level -> StateT WorldState m Level
@@ -270,7 +319,7 @@ inferLevel lvl = do
 
       new_boulders = inferBoulders ss
 
-      new_monsters = inferMonsters ss (lvl^.monsters)
+      new_monsters = inferMonsters ss lvl (cx, cy) (lvl^.monsters)
 
   let updated_lvl = lvl & (cells .~ new_cells) .
                           (boulders .~ new_boulders) .
@@ -361,18 +410,18 @@ levelSquares = [ (x, y) | x <- [0..79], y <- [1..21] ]
 
 -- Given screenstate and old state of monsters, update it and return new
 -- state of monsters.
-inferMonsters :: ScreenState -> M.Map (Int, Int) MonsterImage -> M.Map (Int, Int) MonsterImage
-inferMonsters ss monsters =
+inferMonsters :: ScreenState -> Level -> (Int, Int) -> M.Map (Int, Int) MonsterImage -> M.Map (Int, Int) MonsterImage
+inferMonsters ss lvl (cx, cy) monsters =
   -- Collect all squares that look like monsters
-  let monster_squares = filter (\(x, y) -> looksLikeMonster $ getCell x y ss) levelSquares
-   in foldl' foldMonsters M.empty monster_squares
+  let monster_squares = filter (\(x, y) -> looksLikeMonster lvl (x, y) $ getCell x y ss) levelSquares
+   in M.delete (cx, cy) $ foldl' foldMonsters M.empty monster_squares
  where
   foldMonsters new_monsters (mx, my) =
     let cell@Cell{..} = getCell mx my ss
-        retmon x = M.insert (mx, my)
-                            (MonsterImage { _monster = x
-                                          , _monsterAppearance = show cell })
-                            new_monsters
+        newmon m = MonsterImage { _monster = m
+                                , _isPeaceful = False
+                                , _monsterAppearance = show cell }
+        retmon mi = M.insert (mx, my) mi new_monsters
 
         -- If identical looking monster was next to this one (or at the same
         -- place) and no other monster is next to it, assume this is the same
@@ -381,28 +430,22 @@ inferMonsters ss monsters =
           let candidates = M.fromList $ concat $ flip fmap [(x, y) | x <- [mx-1..mx+1], y <- [my-1..my+1]] $ \(x, y) ->
                              case M.lookup (x, y) monsters of
                                Nothing -> []
-                               Just (MonsterImage m appearance) ->
-                                 if appearance == show cell
-                                   then [((x, y), m)]
+                               Just mi ->
+                                 if mi^.monsterAppearance == show cell
+                                   then [((x, y), mi)]
                                    else []
           in if M.size candidates == 1 -- We want unambiguous candidate so only copy the monster if there is one single candidate
                then head $ M.elems candidates
                else def
 
      in if | foregroundColor == Blue && contents == "e"
-             -> retmon FloatingEyeMonster
+             -> retmon $ monsterMovedMaybe $ newmon FloatingEyeMonster
            | foregroundColor == Magenta && contents == "h"
-             -> retmon $ monsterMovedMaybe AmbiguousMonster
-           | otherwise -> retmon UnremarkableMonster
+             -> retmon $ monsterMovedMaybe $ newmon AmbiguousMonster
+           | otherwise -> retmon $ monsterMovedMaybe $ newmon UnremarkableMonster
 
-
-looksLikeMonster :: Cell -> Bool
-looksLikeMonster (Cell{..}) | T.length contents /= 1 = False
-looksLikeMonster (Cell{..}) = case T.head contents of
-  -- statues
-  _ | foregroundColor == White && backgroundColor == Black -> False
-
-  -- rest
+isMonsterSymbol :: Char -> Bool
+isMonsterSymbol c = case c of
   ch | ch >= 'a' && ch <= 'z' -> True
   ch | ch >= 'A' && ch <= 'Z' -> True
   '&' -> True
@@ -414,8 +457,21 @@ looksLikeMonster (Cell{..}) = case T.head contents of
   ']' -> True
   _ -> False
 
+looksLikeMonster :: Level -> (Int, Int) -> Cell -> Bool
+looksLikeMonster _ _ (Cell{..}) | T.length contents /= 1 = False
+looksLikeMonster _ _ (Cell{..}) | not (isMonsterSymbol $ T.head contents) = False
+looksLikeMonster lvl pos (Cell{..}) =
+  if | foregroundColor == White && backgroundColor == Black &&
+       hasStatue lvl pos == True -> False
+     | otherwise -> True
+
 inferSquare :: MonadState WorldState m => (Int, Int) -> (LevelFeature -> LevelFeature) -> m ()
 inferSquare pos modifier = do
   cl <- get
   put $ cl & levels.at (cl^.currentLevel)._Just.cells.ix pos.cellFeature._Just %~ modifier
+
+inferPeaceful :: MonadState WorldState m => (Int, Int) -> m ()
+inferPeaceful pos = do
+  cl <- get
+  put $ cl & levels.at (cl^.currentLevel)._Just.monsters.at pos._Just.isPeaceful .~ True
 

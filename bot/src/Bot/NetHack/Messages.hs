@@ -5,18 +5,38 @@ module Bot.NetHack.Messages
   where
 
 import Bot.NetHack.MonadAI
+import Bot.NetHack.ScreenPattern
 import Control.Monad
+import qualified Data.IntMap.Strict as IM
 import Data.Monoid
 import qualified Data.Text as T
+
+import Debug.Trace
 
 -- | Presses space until all messages have been consumed.
 --
 -- Returns all the messages saw on the screen.
-consumeMessages :: MonadAI m => m [T.Text]
-consumeMessages = do
+consumeMessages :: MonadAI m => IM.IntMap (T.Text, m ()) -> m [T.Text]
+consumeMessages answermap = do
   skipThingsThatAreHere
   msgs <- pluckMessages
+  answerQuestions answermap
   return $ filter (not . T.null) msgs
+
+answerQuestions :: MonadAI m => IM.IntMap (T.Text, m ()) -> m ()
+answerQuestions answermap = do
+  (_, _, cy) <- currentScreen
+  more <- traceShow (fmap fst $ IM.elems $ answermap) $ matchf (limitRows [0,1,2] "--More--")
+
+  -- Some kind of question on the screen?
+  when (cy == 0 && more == False) $ do
+    line <- getScreenLine 0
+    let looper [] = return ()
+        looper ((_, (text, action)):rest) = if T.isInfixOf text line
+                                         then action
+                                         else looper rest
+
+    looper (IM.toDescList answermap)
 
 skipThingsThatAreHere :: MonadAI m => m ()
 skipThingsThatAreHere = do
@@ -40,6 +60,6 @@ pluckMessages = do
   -- Is there a "--More--" on the screen? Press space is yes
   has_more <- matchf "--More--"
   if has_more
-    then send " " >> (msgs <>) <$> consumeMessages
+    then send " " >> (msgs <>) <$> pluckMessages
     else return msgs
 
