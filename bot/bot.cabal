@@ -16,8 +16,10 @@ library
                        Bot.NetHack.Config
                        Bot.NetHack.DecisionMaker
                        Bot.NetHack.InferWorldState
+                       Bot.NetHack.Logs
                        Bot.NetHack.Messages
                        Bot.NetHack.MonadAI
+                       Bot.NetHack.SelectItem
                        Bot.NetHack.ScreenPattern
                        Bot.NetHack.WorldState
   build-depends:       array
@@ -34,6 +36,7 @@ library
                       ,stm
                       ,terminal-emulator
                       ,text
+                      ,time
                       ,transformers
                       ,yaml
   hs-source-dirs:      src

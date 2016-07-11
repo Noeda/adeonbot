@@ -17,6 +17,7 @@ module Bot.NetHack.WorldState
   , levelDescription
   , branchName
   , Level(..)
+  , whereSearchedLastTime
   , hasStatue
   , emptyLevel
   , cells
@@ -24,10 +25,12 @@ module Bot.NetHack.WorldState
   , monsters
   , LevelFeature(..)
   , isPassable
+  , numberOfTimesSearched
   , LevelCell(..)
   , cellFeature
   , cellItems
   , cellItemAppearanceLastTime
+  , BUC(..)
   , Monster(..)
   , MonsterImage(..)
   , isPeaceful
@@ -72,12 +75,14 @@ data LevelMeta = LevelMeta
 
 data Level = Level
   { _cells    :: !(A.Array (Int, Int) LevelCell)
+  , _whereSearchedLastTime :: !(Maybe (Int, Int, Int))
   , _boulders :: !(S.Set (Int, Int))
   , _monsters :: !(M.Map (Int, Int) MonsterImage) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 data LevelCell = LevelCell
   { _cellFeature :: !(Maybe LevelFeature)
+  , _numberOfTimesSearched :: !Int
   , _cellItemAppearanceLastTime :: String
   , _cellItems :: !ItemPileImage }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
@@ -123,10 +128,17 @@ data Monster
   | MindFlayerMonster      -- Evil stuff.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
 
+data BUC
+  = Uncursed
+  | Blessed
+  | Cursed
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
 data Status
   = Confstunned            -- Confused or stunned. Right now we treat them the same.
   | Blind                  -- Blind. Can't infer things about surroundings the same way.
   | FoodPoisoning          -- Oh my, what did you eat??? BAD BOT
+  | Hungry                 -- Hungry, Weak and Fainting all in one
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
 
 data ItemPileImage
@@ -170,11 +182,13 @@ emptyLevelCell :: LevelCell
 emptyLevelCell = LevelCell
   { _cellFeature = Nothing
   , _cellItemAppearanceLastTime = ""
+  , _numberOfTimesSearched = 0
   , _cellItems = NoPile }
 
 emptyLevel :: Level
 emptyLevel = Level
   { _cells = A.listArray ((0, 0), (79, 21)) (repeat emptyLevelCell)
+  , _whereSearchedLastTime = Nothing
   , _boulders = S.empty
   , _monsters = M.empty }
 

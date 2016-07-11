@@ -7,6 +7,7 @@ module Bot.NetHack
 
 import Bot.NetHack.AIEntry
 import Bot.NetHack.Config
+import Bot.NetHack.Logs
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
@@ -79,7 +80,8 @@ botEntry config getNextStatus refresh send = aiLoop (emptyAIState config)
     let (new_aistate, sending) = stepAIState screenstate cx cy aistate
     if B.null sending
       then error "botEntry: AI decided not to send anything to NetHack. Panic."
-      else atomically $ send sending
+      else logTrace ("Sent " <> show sending) $
+             atomically $ send sending
     return new_aistate
 
 run :: BotConfig -> IO ()

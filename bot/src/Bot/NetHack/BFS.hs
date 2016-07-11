@@ -1,11 +1,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Bot.NetHack.BFS
-  ( breadthFirstSearch )
+  ( breadthFirstSearch
+  , expand )
   where
 
 import Data.Foldable
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 
 -- | Breadth-first search. sUCH...GENERUC!!!!
 breadthFirstSearch :: forall a. (Ord a, Show a)
@@ -45,4 +48,18 @@ breadthFirstSearch start neighbours is_goal =
   backTrack reverse_map pos = case M.lookup pos reverse_map of
     Nothing -> []
     Just next_pos -> pos:backTrack reverse_map next_pos
+
+-- | Expands to all found neighbours.
+expand :: forall a. (Ord a, Show a)
+       => a           -- ^ Staring point.
+       -> (a -> [a])  -- ^ Get neighbours of a point.
+       -> S.Set a     -- ^ All reachable points, including starting point.
+expand start_point neighbours = iteration (S.singleton start_point) (S.singleton start_point)
+ where
+  iteration visiting_points !visited_points | S.null visiting_points = visited_points
+  iteration visiting_points !visited_points =
+    let visit_points_next_time = S.difference (foldl' (\set i -> S.insert i set) S.empty (concat $ fmap neighbours $ S.toList visiting_points))
+                                              visited_points
+        visited_points_next_time = S.union visit_points_next_time visited_points
+     in iteration visit_points_next_time visited_points_next_time
 

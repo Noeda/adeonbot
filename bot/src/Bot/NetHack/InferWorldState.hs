@@ -1,13 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 
 module Bot.NetHack.InferWorldState
   ( inferWorldState
   , inferSquare
+  , inferSearch
   , inferPeaceful
+  , dirtyInventory
+  , setLastSearchedPosition
+  , nameToItem
   , levelSquares )
   where
 
@@ -20,18 +25,21 @@ import qualified Data.Array.MArray as A
 import qualified Data.Array.ST as A
 import Data.Foldable
 import qualified Data.IntMap.Strict as IM
+import Data.List
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
+import Text.Regex.TDFA hiding ( match )
 import Data.Traversable ( for )
 import Terminal.Screen
 
 -- | Uses what is currently seen on the screen to infer and update bot's world
 -- state (see `WorldState`).
 inferWorldState :: MonadAI m => [T.Text] -> WorldState -> m WorldState
-inferWorldState messages = execStateT $
+inferWorldState messages = execStateT $ do
+  inferStatuses
   inferCurrentLevel messages
 
 inferLevelIndex :: MonadAI m => StateT WorldState m ()
@@ -105,6 +113,23 @@ inferLevelIndex = do
       send " "
       dismissMores
 
+inferStatuses :: MonadAI m => StateT WorldState m ()
+inferStatuses = do
+  matchf (regex "T:[0-9]+ +(.+)$") >>= \case
+    [_whole, T.strip -> status_line] -> do
+      let status_words = fmap T.strip $ T.words status_line
+      statuses .= S.empty
+      for_ status_words $ \case
+        "Blind" -> statuses %= S.insert Blind
+        "FoodPois" -> statuses %= S.insert FoodPoisoning
+        "Conf" -> statuses %= S.insert Confstunned
+        "Stun" -> statuses %= S.insert Confstunned
+        "Hungry" -> statuses %= S.insert Hungry
+        "Weak" -> statuses %= S.insert Hungry
+        "Fainting" -> statuses %= S.insert Hungry
+        _ -> return ()
+    _ -> return ()
+
 inferInventory :: MonadAI m => [T.Text] -> StateT WorldState m ()
 inferInventory messages = do
   let msgcheck m = any (T.isInfixOf m) messages
@@ -161,26 +186,36 @@ inferCurrentLevel messages = do
   cl <- use currentLevel
   use (levels.at cl) >>= \case
     Just lvl -> do
-      updated_lvl <- inferLevel lvl
+      updated_lvl <- inferLevel lvl messages
       levels.at cl .= Just updated_lvl
     _ -> error "Impossible"
 
-inferCurrentlyStandingSquare :: MonadAI m => Level -> StateT WorldState m Level
-inferCurrentlyStandingSquare lvl = do
+inferCurrentlyStandingSquare :: MonadAI m => Level -> [T.Text] -> StateT WorldState m Level
+inferCurrentlyStandingSquare lvl msgs = do
   (_, cx, cy) <- currentScreen
 
   -- Check floor if
   -- 1) We don't know what level feature we are standing on.
   -- 2) There are items on the floor but we haven't checked which items
   -- exactly.
+  -- 3) We get a message that suggests something is on the floor
   let lcell = lvl^?cells.ix (cx, cy)
   if (isNothing $ join $ lcell^?_Just.cellFeature) ||
-     (lcell^?_Just.cellItems == Just PileSeen)
+     (lcell^?_Just.cellItems == Just PileSeen) ||
+     (any (T.isInfixOf "You see here") msgs) ||
+     (any (T.isInfixOf "You feel here") msgs)
     then checkFloor cx cy
     else return lvl
  where
+  skipEngravings = do
+    thing <- matchf (limitRows [0] $ regex "You read:|Something is written|Something is engraved")
+    mm <- matchf "--More--"
+    when (thing && mm) $ send " " >> skipEngravings
+
   checkFloor cx cy = do
     send ":"
+    skipEngravings
+
     thing <- matchf (limitRows [0] $ regex "There is (a |an )?([a-zA-Z]+|[a-zA-Z]+ [a-zA-Z]+) here.")
     what_is_that_thing <- case thing of
       [_, _, description] -> return $ descriptionToLevelFeature description
@@ -224,12 +259,19 @@ inferItemsBeingLookedAt _ = do
          in i `seq` return $ Pile [nameToItem name]
       _ -> do
         -- Multi item case then
-        matchf (limitRows [0] $ regex "Things that you feel here:|Things that are here:") >>= \case
+        matchf (limitRows [0,2] $ regex "Things that you feel here:|Things that are here:") >>= \case
           Just dd -> itemInferLoop dd
           Nothing ->
             return NoPile
 
-  itemInferLoop dd = do
+  itemInferLoop dd =
+    matchf (limitRows [0] $ regex "Something is written|You read: |Something is engraved") >>= \case
+      True -> bailout
+      False -> itemInferLoop2 dd
+
+  bailout = return $ NoPile
+
+  itemInferLoop2 dd = do
     (ss, _, _) <- currentScreen
 
     let left_column = x dd
@@ -262,7 +304,49 @@ inferItemsBeingLookedAt _ = do
 
 nameToItem :: T.Text -> Item
 nameToItem txt | T.isInfixOf "statue of" txt = Statue
-nameToItem _ = StrangeItem
+nameToItem (T.strip -> txt'') = case name of
+  "food ration" -> Food
+  "food rations" -> Food
+  _ -> StrangeItem
+ where
+  txt' = T.unpack txt''
+
+  txt_article_removed = if isPrefixOf "a " txt'
+                          then drop 2 txt'
+                          else (if isPrefixOf "an " txt'
+                                  then drop 3 txt'
+                                  else (if isPrefixOf "the " txt'
+                                          then drop 4 txt'
+                                          else txt'))
+
+  (quentity, txt_quantity_removed) = case txt_article_removed =~ ("([0-9]+) (.+)" :: String) of
+    [[_whole, quantity, rest]] -> (read quantity, rest)
+
+    _ -> (1, txt_article_removed)
+
+  (buc, txt_buc_removed) = if isPrefixOf "uncursed " txt_article_removed
+                             then (Just Uncursed, drop 9 txt_article_removed)
+                             else (if isPrefixOf "blessed " txt_article_removed
+                                     then (Just Blessed, drop 8 txt_article_removed)
+                                     else (if isPrefixOf "cursed " txt_article_removed
+                                             then (Just Cursed, drop 7 txt_article_removed)
+                                             else (Nothing, txt_article_removed)))
+
+  (enchantment, enchantment_removed) = case txt_buc_removed =~ ("(\\+|\\-)([0-9]+) (.+)" :: String) of
+    [[_whole, sign, enchantment, rest]] ->
+      (if sign == "-"
+         then negate $ read enchantment
+         else read enchantment
+      ,rest)
+
+    _ -> (0, txt_buc_removed)
+
+  -- wizard mode
+  weight_removed = case enchantment_removed =~ ("(.+) \\([0-9]+ aum\\)" :: String) of
+    [[_whole, first_part]] -> first_part
+    _ -> enchantment_removed
+
+  name = weight_removed
 
 descriptionToLevelFeature :: T.Text -> Maybe LevelFeature
 descriptionToLevelFeature "staircase up" = Just Upstairs
@@ -303,11 +387,10 @@ isItemSymbol "$" _ = True
 isItemSymbol "%" _ = True
 isItemSymbol "0" fcolor | fcolor == Cyan = True
 isItemSymbol "_" fcolor | fcolor == Cyan = True
-isItemSymbol ch fcolor | T.length ch == 1 && fcolor == White && isMonsterSymbol (T.head ch) = True
 isItemSymbol _ _ = False
 
-inferLevel :: MonadAI m => Level -> StateT WorldState m Level
-inferLevel lvl = do
+inferLevel :: MonadAI m => Level -> [T.Text] -> StateT WorldState m Level
+inferLevel lvl msgs = do
   (ss, cx, cy) <- currentScreen
   statuses <- use statuses
   let (sw, sh) = screenSize ss
@@ -325,7 +408,7 @@ inferLevel lvl = do
                           (boulders .~ new_boulders) .
                           (monsters .~ new_monsters)
 
-  inferCurrentlyStandingSquare updated_lvl
+  inferCurrentlyStandingSquare updated_lvl msgs
  where
   inferBoulders :: ScreenState -> S.Set (Int, Int)
   inferBoulders ss = foldl' folding S.empty [(x, y) | x <- [0..sw-1], y <- [1..sh-3]]
@@ -414,20 +497,34 @@ inferMonsters :: ScreenState -> Level -> (Int, Int) -> M.Map (Int, Int) MonsterI
 inferMonsters ss lvl (cx, cy) monsters =
   -- Collect all squares that look like monsters
   let monster_squares = filter (\(x, y) -> looksLikeMonster lvl (x, y) $ getCell x y ss) levelSquares
-   in M.delete (cx, cy) $ foldl' foldMonsters M.empty monster_squares
+      (unmoved_monsters, visited_old_monsters) = foldl' foldUnmovedMonsters (M.empty, S.empty) monster_squares
+      (final_monsters, _) = foldl' foldMonsters (unmoved_monsters, visited_old_monsters) monster_squares
+   in final_monsters
  where
-  foldMonsters new_monsters (mx, my) =
+  foldUnmovedMonsters (new_monsters, old_monsters_visited) (mx, my)
+    | mx == cx && my == cy = (new_monsters, old_monsters_visited)
+    | otherwise =
+
+    let cell@Cell{..} = getCell mx my ss
+     in case M.lookup (mx, my) monsters of
+          Just mon | mon^.monsterAppearance == show cell ->
+            (M.insert (mx, my) mon new_monsters, S.insert (mx, my) old_monsters_visited)
+          _ -> (new_monsters, old_monsters_visited)
+
+  foldMonsters (new_monsters, old_monsters_visited) (mx, my) | mx == cx && my == cy = (new_monsters, old_monsters_visited)
+  foldMonsters (new_monsters, old_monsters_visited) (mx, my) | M.member (mx, my) new_monsters = (new_monsters, old_monsters_visited)
+  foldMonsters (new_monsters, old_monsters_visited) (mx, my) =
     let cell@Cell{..} = getCell mx my ss
         newmon m = MonsterImage { _monster = m
                                 , _isPeaceful = False
                                 , _monsterAppearance = show cell }
-        retmon mi = M.insert (mx, my) mi new_monsters
+        retmon (mi, new_mon) = (M.insert (mx, my) mi new_monsters, new_mon)
 
         -- If identical looking monster was next to this one (or at the same
         -- place) and no other monster is next to it, assume this is the same
         -- monster
         monsterMovedMaybe def =
-          let candidates = M.fromList $ concat $ flip fmap [(x, y) | x <- [mx-1..mx+1], y <- [my-1..my+1]] $ \(x, y) ->
+          let candidates = M.fromList $ concat $ flip fmap [(x, y) | x <- [mx-1..mx+1], y <- [my-1..my+1], S.notMember (x, y) old_monsters_visited] $ \(x, y) ->
                              case M.lookup (x, y) monsters of
                                Nothing -> []
                                Just mi ->
@@ -435,8 +532,8 @@ inferMonsters ss lvl (cx, cy) monsters =
                                    then [((x, y), mi)]
                                    else []
           in if M.size candidates == 1 -- We want unambiguous candidate so only copy the monster if there is one single candidate
-               then head $ M.elems candidates
-               else def
+               then (head $ M.elems candidates, S.insert (head $ M.keys candidates) old_monsters_visited)
+               else (def, old_monsters_visited)
 
      in if | foregroundColor == Blue && contents == "e"
              -> retmon $ monsterMovedMaybe $ newmon FloatingEyeMonster
@@ -474,4 +571,20 @@ inferPeaceful :: MonadState WorldState m => (Int, Int) -> m ()
 inferPeaceful pos = do
   cl <- get
   put $ cl & levels.at (cl^.currentLevel)._Just.monsters.at pos._Just.isPeaceful .~ True
+
+dirtyInventory :: MonadState WorldState m => m ()
+dirtyInventory = inventoryDirty .= True
+
+inferSearch :: (MonadState WorldState m) => (Int, Int) -> m ()
+inferSearch (cx, cy) = do
+  cl <- get
+  for_ [(nx, ny) | nx <- [cx-1..cx+1], ny <- [cy-1..cy+1]] $ \npos ->
+    modify $ levels.at (cl^.currentLevel)._Just.cells.ix npos.numberOfTimesSearched +~ 1
+
+setLastSearchedPosition :: (MonadState WorldState m) => (Int, Int) -> m ()
+setLastSearchedPosition (cx, cy) = do
+  cl <- get
+  modify $ levels.at (cl^.currentLevel)._Just.whereSearchedLastTime %~ \case
+    Just (px, py, count) | px == cx && py == cy -> Just (px, py, count+1)
+    _ -> Just (cx, cy, 0)
 

@@ -11,8 +11,6 @@ import qualified Data.IntMap.Strict as IM
 import Data.Monoid
 import qualified Data.Text as T
 
-import Debug.Trace
-
 -- | Presses space until all messages have been consumed.
 --
 -- Returns all the messages saw on the screen.
@@ -26,7 +24,7 @@ consumeMessages answermap = do
 answerQuestions :: MonadAI m => IM.IntMap (T.Text, m ()) -> m ()
 answerQuestions answermap = do
   (_, _, cy) <- currentScreen
-  more <- traceShow (fmap fst $ IM.elems $ answermap) $ matchf (limitRows [0,1,2] "--More--")
+  more <- matchf (limitRows [0,1,2] "--More--")
 
   -- Some kind of question on the screen?
   when (cy == 0 && more == False) $ do
@@ -44,9 +42,15 @@ skipThingsThatAreHere = do
 
   -- Skip "Things that are here:" item listing
   when (T.isInfixOf "Things that are here:" topline ||
-        T.isInfixOf "Things that you feel here:" topline) $ do
+        T.isInfixOf "Things that you feel here:" topline ||
+        T.isInfixOf "Something is written" topline ||
+        T.isInfixOf "Something is engraved" topline ||
+        T.isInfixOf "There's some graffiti on the floor here." topline ||
+        T.isInfixOf "You read: " topline) $ do
     has_more <- matchf "--More--"
-    when has_more $ send " "
+    when has_more $ do
+      send " "
+      skipThingsThatAreHere
 
 pluckMessages :: MonadAI m => m [T.Text]
 pluckMessages = do
