@@ -324,13 +324,13 @@ nameToItem (T.strip -> txt'') = case name of
 
     _ -> (1, txt_article_removed)
 
-  (buc, txt_buc_removed) = if isPrefixOf "uncursed " txt_article_removed
-                             then (Just Uncursed, drop 9 txt_article_removed)
-                             else (if isPrefixOf "blessed " txt_article_removed
-                                     then (Just Blessed, drop 8 txt_article_removed)
-                                     else (if isPrefixOf "cursed " txt_article_removed
-                                             then (Just Cursed, drop 7 txt_article_removed)
-                                             else (Nothing, txt_article_removed)))
+  (buc, txt_buc_removed) = if isPrefixOf "uncursed " txt_quantity_removed
+                             then (Just Uncursed, drop 9 txt_quantity_removed)
+                             else (if isPrefixOf "blessed " txt_quantity_removed
+                                     then (Just Blessed, drop 8 txt_quantity_removed)
+                                     else (if isPrefixOf "cursed " txt_quantity_removed
+                                             then (Just Cursed, drop 7 txt_quantity_removed)
+                                             else (Nothing, txt_quantity_removed)))
 
   (enchantment, enchantment_removed) = case txt_buc_removed =~ ("(\\+|\\-)([0-9]+) (.+)" :: String) of
     [[_whole, sign, enchantment, rest]] ->
