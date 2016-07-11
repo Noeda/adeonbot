@@ -41,6 +41,7 @@ import Terminal.Screen
 
 data AIF f
   = GetCurrentScreenState !(ScreenState -> Int -> Int -> f)
+  | Yield f
   | Send !B.ByteString f
   | SendRaw !B.ByteString f  -- Used by WAI, otherwise identically interpreted as Send
   deriving ( Functor )
@@ -72,6 +73,7 @@ instance MonadWAI m => MonadWAI (AbortAI m) where
   askMessages = AbortAI $ lift $ askMessages
   modWorld fun = AbortAI $ lift $ modWorld fun
   sendRaw bs = AbortAI $ lift $ sendRaw bs
+  yield = AbortAI $ lift $ yield
 
 instance MonadAI m => MonadAI (AbortAI m) where
   send bs = AbortAI $ lift $ send bs
@@ -128,6 +130,7 @@ class MonadAI m => MonadWAI m where
   askMessages :: m [T.Text]
   modWorld :: (WorldState -> WorldState) -> m ()
   sendRaw :: B.ByteString -> m ()
+  yield :: m ()
 
 instance Monad m => MonadWAI (WAI m) where
   askWorldState = WAI $ lift $ do
@@ -141,6 +144,8 @@ instance Monad m => MonadWAI (WAI m) where
   modWorld fun = WAI $ lift $ _1 %= fun
 
   sendRaw bs = WAI $ liftF $ SendRaw bs ()
+
+  yield = WAI $ liftF $ Yield ()
 
 class MonadAnswerer m where
   withAnswerer :: T.Text -> m () -> m a -> m a

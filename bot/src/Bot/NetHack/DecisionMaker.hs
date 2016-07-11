@@ -44,12 +44,62 @@ decisionMaker = forever $ do
     (send "\n") $
     runAbortAI_ (eatIfHungry <|>
                  pursue "Going towards monster at " findMonsterKill <|>
+                 pickUpSupplies <|>
                  pursue "Going towards an explorable at " findExplorablePath <|>
                  findClosedDoors <|>
                  findLockedDoors <|>
                  findDownstairs <|>
                  searchAround <|>
                  error "nothing to do")
+
+count :: Foldable f => (a -> Bool) -> f a -> Int
+count counter folding =
+  foldl' (\val item -> if counter item then val+1 else val) 0 folding
+
+pickUpSupplies :: (Alternative m, MonadWAI m) => m ()
+pickUpSupplies = do
+  -- Pick up food items if we have less than 5
+  wstate <- askWorldState
+  lvl <- getCurrentLevel wstate
+  let inv = wstate^.inventory
+      num_food_items = count (== Food) inv
+
+  when (num_food_items >= 5) empty
+
+  -- Find closest food item on the level
+  let has_food iimage = case iimage of
+                          Pile items -> any (== Food) items
+                          _ -> False
+      food_item_piles = S.fromList $
+                        filter (\(x, y) -> fmap has_food (lvl^?cells.ix (x, y).cellItems) == Just True)
+                               levelSquares
+
+  -- If there are food piles then we can't pick up anything at this point :-(
+  when (S.null food_item_piles) $
+    logTrace "Would try to pick up food but no known food on the level." empty
+
+  (_, cx, cy) <- currentScreen
+
+  path <- al' $ levelSearch (cx, cy)
+                            (\goal _ -> S.member goal food_item_piles)
+                            lvl
+
+  case path of
+    [] -> do
+      sendRaw ","
+      line <- getScreenLine 0
+      if T.isInfixOf "There is nothing here to pick up." line
+        then modWorld (execState (inferItemPileImage (cx, cy) NoPile)) >> empty
+        else do void $ selectManyItems (\item counter -> case item of
+                  Food | counter < 5 ->
+                    logTrace ("Picking up food item (" <> show counter <> " -> " <> show (counter+1) <> ")")
+                             (1, counter+1)
+                  _ -> (0, counter)) num_food_items
+                modWorld $ execState dirtyInventory
+                yield
+    (p:_rest) -> do
+      d <- al' $ diffToDir (cx, cy) p
+      send d
 
 searchAround :: (Alternative m, MonadWAI m) => m ()
 searchAround = do

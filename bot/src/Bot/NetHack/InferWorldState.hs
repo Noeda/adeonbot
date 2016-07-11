@@ -10,6 +10,7 @@ module Bot.NetHack.InferWorldState
   , inferSquare
   , inferSearch
   , inferPeaceful
+  , inferItemPileImage
   , dirtyInventory
   , setLastSearchedPosition
   , nameToItem
@@ -307,6 +308,24 @@ nameToItem txt | T.isInfixOf "statue of" txt = Statue
 nameToItem (T.strip -> txt'') = case name of
   "food ration" -> Food
   "food rations" -> Food
+  "slime mold" -> Food
+  "slime molds" -> Food
+  "lembas wafer" -> Food
+  "lembas wafers" -> Food
+  "lichen corpse" -> Food
+  "lichen corpses" -> Food
+  "K-ration" -> Food
+  "K-rations" -> Food
+  "C-ration" -> Food
+  "C-rations" -> Food
+  "cream pie" -> Food
+  "cream pies" -> Food
+  "candy bar" -> Food
+  "candy bars" -> Food
+  "pancake" -> Food
+  "pancakes" -> Food
+  "melon" -> Food
+  "melons" -> Food
   _ -> StrangeItem
  where
   txt' = T.unpack txt''
@@ -588,3 +607,9 @@ setLastSearchedPosition (cx, cy) = do
     Just (px, py, count) | px == cx && py == cy -> Just (px, py, count+1)
     _ -> Just (cx, cy, 0)
 
+inferItemPileImage :: (MonadState WorldState m) => (Int, Int) -> ItemPileImage -> m ()
+inferItemPileImage (cx, cy) pile = do
+  cl <- get
+  modify $ (levels.at (cl^.currentLevel)._Just.cells.ix (cx, cy).cellItems .~ pile) .
+           (levels.at (cl^.currentLevel)._Just.cells.ix (cx, cy).cellItemAppearanceLastTime .~ "")
+  

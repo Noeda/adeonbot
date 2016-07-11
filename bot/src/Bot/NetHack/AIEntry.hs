@@ -40,6 +40,7 @@ stepAIState screenstate x y aistate =
 runAI :: ScreenState -> Int -> Int -> AIState -> (FreeT AIF Identity ()) -> (AIState, B.ByteString)
 runAI screenstate w h aistate' (FreeT (Identity ai)) = case ai of
   Pure () -> (aistate, B.empty)
+  Free (Yield next) -> runAI screenstate w h aistate next
   Free (GetCurrentScreenState fun) -> runAI screenstate w h aistate (fun screenstate w h)
   Free (Send bs next) -> (aistate & nextAction .~ (toFT next), bs)
   Free (SendRaw bs next) -> (aistate & nextAction .~ (toFT next), bs)
@@ -71,6 +72,8 @@ bot = do
       (item, (new_state, _, _)) <- runStateT maker (new_state, [], IM.empty)
       case item of
         Pure msgs -> return (new_state, msgs)
+        Free (Yield next) ->
+          exhaustMessages new_state next
         Free (SendRaw bs next) -> do
           send bs
           exhaustMessages new_state next
@@ -85,6 +88,8 @@ bot = do
       (item, (new_world, _, new_answermap)) <- runStateT maker (new_state, msgs, answermap)
       case item of
         Pure () -> error "decisionMaker ran out."
+        Free (Yield next) ->
+          worldLoop new_world new_answermap (toWAI $ toFT next)
         Free (SendRaw bs next) -> do
           send bs
           exhaust new_state msgs new_answermap next
