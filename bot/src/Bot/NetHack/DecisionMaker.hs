@@ -289,7 +289,8 @@ findMonsterKill = do
   (_, cx, cy) <- currentScreen
   lvl <- getCurrentLevel wstate
 
-  let mset = M.keysSet $ M.filter (\m -> m^.isPeaceful == False) $ (lvl^.monsters)
+  let mset = M.keysSet $ M.filter (\m -> m^.isPeaceful == False &&
+                                         m^.monster /= FloatingEyeMonster) $ (lvl^.monsters)
    in al' $
       levelSearch (cx, cy)
                   (\goal _ -> S.member goal mset && goal /= (cx, cy))
