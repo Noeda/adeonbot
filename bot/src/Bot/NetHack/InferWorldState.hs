@@ -41,8 +41,15 @@ import Terminal.Screen
 -- state (see `WorldState`).
 inferWorldState :: MonadAI m => [T.Text] -> WorldState -> m WorldState
 inferWorldState messages = execStateT $ do
+  inferTurnCount
   inferStatuses
   inferCurrentLevel messages
+
+inferTurnCount :: (MonadAI m, MonadState WorldState m) => m ()
+inferTurnCount =
+  matchf " T:([0-9]+) " >>= \case
+    [_whole, read -> turncount] -> turn .= turncount
+    _ -> return ()
 
 inferLevelIndex :: MonadAI m => StateT WorldState m ()
 inferLevelIndex = do
