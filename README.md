@@ -19,6 +19,8 @@ That config file, `botconfig.yaml` should have the NetHack command to run.
 Here's an example file contents I use on my local setup:
 
     name: Adeonbot
+    password: supersecret_password             # for public servers
+    latency: 1000000000                        # nanoseconds to wait until terminal gets idle
     nethackCommand: ["./nh360/games/nethack"]
 
 .nethackrc
@@ -37,9 +39,12 @@ Here's an example file contents I use on my local setup:
     OPTIONS=showrace
     OPTIONS=!pet
     OPTIONS=!timed_delay
+    OPTIONS=number_pad:0
 
     SYMBOLS=S_vcdoor:7
     SYMBOLS=S_hcdoor:7
     SYMBOLS=S_grave:7
     SYMBOLS=S_rock:8
+    SYMBOLS=S_ghost:X
+
 

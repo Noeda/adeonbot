@@ -75,7 +75,7 @@ botEntry config getNextStatus refresh send = do
 
   waitUntilCooldown = do
     now <- toNanoSecs <$> getTime Monotonic
-    let accepted_time = now - 40000000 -- 40ms
+    let accepted_time = now - fromIntegral (latency config)
 
     maybestatus <- atomically $ do
       st@(_, _, _, timing) <- getNextStatus
@@ -135,9 +135,13 @@ run config = withRawTerminalMode $ do
 
   tid <- myThreadId
 
-  withProcessInPty (cmd !! 0) (tail cmd) $ \read_input write_output ->
+  withProcessInPty (cmd !! 0) (tail cmd) $ \read_input write_output -> do
+    -- Give some time for command to warm up (like connecting to NAO)
+    threadDelay 2000000
+
     withAsync (botEntry config get_next_status refresh write_output >> killThread tid) $ \bot_async -> do
       liftIO $ link bot_async
+
       withAsync (forever $ do
                   bs <- B.hGetSome stdin 1024
                   atomically $ write_output bs) $ \_ -> flip evalStateT (emptyScreenState 80 24, emulator, 0, 0) $ forever $ do

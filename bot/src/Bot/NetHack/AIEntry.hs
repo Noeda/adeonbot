@@ -22,7 +22,9 @@ import Control.Monad.State.Strict
 import Control.Monad.Trans.Free
 import Control.Monad.Trans.Free.Church
 import qualified Data.ByteString as B
+import Data.Monoid
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Text.Encoding as T
 import Data.Time
 import Terminal.Screen
 
@@ -42,7 +44,7 @@ emptyAIState bc = liftIO $ do
   now <- getCurrentTime
   return $ AIState
           { _botConfig = bc
-          , _nextAction = bot
+          , _nextAction = bot bc
           , _turnCountLastChanged = (1, now) }
 
 stepAIState :: UTCTime -> ScreenState -> Int -> Int -> AIState -> (AIState, B.ByteString)
@@ -63,6 +65,17 @@ runAI now screenstate w h aistate' (FreeT (Identity ai)) = case ai of
  where
   aistate = aistate' & nextAction .~ (return ())
 
+serverLogin :: MonadAI m => BotConfig -> m Bool
+serverLogin bc = matchfirst $
+  [ ("l) Login", send "l")
+  , ("Please enter your username", send ( (T.encodeUtf8 $ playername bc) <> "\n" ))
+  , ("1) Go to NetHack 3.6.0 menu", send "1")   -- NAO
+  , ("p) Play NetHack 3.6.0", send "p") ] ++ password_item
+ where
+  password_item = case password bc of
+    Nothing -> [ ("Please enter your password", error "serverLogin: password asked but not set in yaml config.") ]
+    Just pw -> [ ("Please enter your password", send ( T.encodeUtf8 pw <> "\n" )) ]
+
 characterCreation :: MonadAI m => m Bool
 characterCreation = matchfirst
   [ ("Shall I pick a character's", send "n")
@@ -72,8 +85,10 @@ characterCreation = matchfirst
   , ("Is this ok?", send "y")
   , ("It is written in the Book of", send " ") ]
 
-bot :: AI ()
-bot = do
+bot :: BotConfig -> AI ()
+bot bc = do
+  send " "
+  repeatUntilFalse $ serverLogin bc
   repeatUntilFalse characterCreation
 
   worldLoop emptyWorldState IM.empty decisionMaker
