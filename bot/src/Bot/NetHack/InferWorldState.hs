@@ -362,10 +362,15 @@ nameToItem (T.strip -> txt'') = case name of
 
     _ -> (0, txt_buc_removed)
 
+  -- foodstuff
+  (is_partly_eaten, partlyeaten_removed) = if isPrefixOf "partly eaten " enchantment_removed
+    then (True, drop 13 enchantment_removed)
+    else (False, enchantment_removed)
+
   -- wizard mode
-  weight_removed = case enchantment_removed =~ ("(.+) \\([0-9]+ aum\\)" :: String) of
+  weight_removed = case partlyeaten_removed =~ ("(.+) \\([0-9]+ aum\\)" :: String) of
     [[_whole, first_part]] -> first_part
-    _ -> enchantment_removed
+    _ -> partlyeaten_removed
 
   name = weight_removed
 

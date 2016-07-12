@@ -220,10 +220,15 @@ eatIfHungry = do
     else empty
  where
   tryEating = do
+    -- Dirty inventory before eating anything; sometimes there are mistakes in
+    -- inventory and they would be rectified
+    modWorld $ execState dirtyInventory
+
     sendRaw "e"
     line <- getScreenLine 0
     when (T.isInfixOf "; eat it?" line || T.isInfixOf "; eat one?" line) $
       logTrace "Saying no to eating corpse/food off ground" $ sendRaw "n"
+    line <- getScreenLine 0
     unless (T.isInfixOf "What do you want to eat" line) $
       logTrace ("Unexpected response to 'e' command: " <> show line) empty
     sendRaw "*"
