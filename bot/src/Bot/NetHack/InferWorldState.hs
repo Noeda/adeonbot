@@ -104,7 +104,7 @@ inferLevelIndex = do
                                                else looper rest
 
         found_level <- looper (IM.assocs levelmetas)
-        unless found_level $ do
+        unless found_level $ logTrace ("Entered a new level " <> show (lvl_description, branchname)) $ do
           let new_index = if IM.null levelmetas
                             then 1
                             else let (largest_key, _) = IM.findMax levelmetas
