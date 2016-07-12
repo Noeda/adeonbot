@@ -16,6 +16,7 @@ library
                        Bot.NetHack.Config
                        Bot.NetHack.DecisionMaker
                        Bot.NetHack.InferWorldState
+                       Bot.NetHack.InferWorldState.PeacefulCheck
                        Bot.NetHack.Logs
                        Bot.NetHack.Messages
                        Bot.NetHack.MonadAI

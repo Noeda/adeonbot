@@ -159,7 +159,7 @@ data Item
 
 data MonsterImage = MonsterImage
   { _monster :: !Monster
-  , _isPeaceful :: !Bool
+  , _isPeaceful :: !(Maybe Bool)
   , _monsterAppearance :: String }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 makeLenses ''MonsterImage

@@ -17,6 +17,7 @@ module Bot.NetHack.InferWorldState
   , levelSquares )
   where
 
+import Bot.NetHack.InferWorldState.PeacefulCheck
 import Bot.NetHack.MonadAI
 import Bot.NetHack.ScreenPattern
 import Bot.NetHack.WorldState
@@ -189,6 +190,7 @@ inferCurrentLevel messages = do
     Just lvl -> do
       updated_lvl <- inferLevel lvl messages
       levels.at cl .= Just updated_lvl
+      inferPeacefulnessOfMonsters
     _ -> error "Impossible"
 
 inferCurrentlyStandingSquare :: MonadAI m => Level -> [T.Text] -> StateT WorldState m Level
@@ -535,7 +537,7 @@ inferMonsters ss lvl (cx, cy) monsters =
   foldMonsters (new_monsters, old_monsters_visited) (mx, my) =
     let cell@Cell{..} = getCell mx my ss
         newmon m = MonsterImage { _monster = m
-                                , _isPeaceful = False
+                                , _isPeaceful = Nothing
                                 , _monsterAppearance = show cell }
         retmon (mi, new_mon) = (M.insert (mx, my) mi new_monsters, new_mon)
 
@@ -589,10 +591,24 @@ inferSquare pos modifier = do
 inferPeaceful :: MonadState WorldState m => (Int, Int) -> m ()
 inferPeaceful pos = do
   cl <- get
-  put $ cl & levels.at (cl^.currentLevel)._Just.monsters.at pos._Just.isPeaceful .~ True
+  put $ cl & levels.at (cl^.currentLevel)._Just.monsters.at pos._Just.isPeaceful .~ Just True
 
 dirtyInventory :: MonadState WorldState m => m ()
 dirtyInventory = inventoryDirty .= True
+
+-- | Goes through the level, finding monsters whose peacefulness status we
+-- don't know and then checks if they are peaceful or not with
+-- `checkPeacefulness`.
+inferPeacefulnessOfMonsters :: (MonadAI m, MonadState WorldState m) => m ()
+inferPeacefulnessOfMonsters = do
+  cl <- get
+  case cl^.levels.at (cl^.currentLevel) of
+    Nothing -> return ()
+    Just lvl -> do
+      for_ levelSquares $ \(x, y) ->
+        case lvl^?monsters.at (x, y)._Just.isPeaceful of
+          Just Nothing -> checkPeacefulness (x, y)
+          _ -> return ()
 
 inferSearch :: (MonadState WorldState m) => (Int, Int) -> m ()
 inferSearch (cx, cy) = do
