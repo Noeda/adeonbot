@@ -95,6 +95,9 @@ bot = do
       (item, (new_state, _, _)) <- runStateT maker (new_state, [], IM.empty)
       case item of
         Pure msgs -> return (new_state, msgs)
+
+        Free (ReportWorldState _ next) -> exhaustMessages new_state next
+
         Free (Yield next) ->
           exhaustMessages new_state next
         Free (SendRaw bs next) -> do
@@ -111,6 +114,9 @@ bot = do
       (item, (new_world, _, new_answermap)) <- runStateT maker (new_state, msgs, answermap)
       case item of
         Pure () -> error "decisionMaker ran out."
+
+        Free (ReportWorldState _ next) -> exhaust new_state msgs answermap next
+
         Free (Yield next) ->
           worldLoop new_world new_answermap (toWAI $ toFT next)
         Free (SendRaw bs next) -> do
