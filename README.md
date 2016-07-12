@@ -3,6 +3,24 @@ Adeonbot
 
 NetHack playing bot.
 
+Build instructions
+------------------
+
+Get `stack` binary in PATH. You can look inside
+http://docs.haskellstack.org/en/stable/README/ for some instructions.
+
+Then build:
+
+    stack setup      # If you don't have appropriate GHC
+    stack build
+    stack exec adeonbot -- botconfig.yaml
+
+That config file, `botconfig.yaml` should have the NetHack command to run.
+Here's an example file contents I use on my local setup:
+
+    name: Adeonbot
+    nethackCommand: ["./nh360/games/nethack"]
+
 .nethackrc
 ----------
 
