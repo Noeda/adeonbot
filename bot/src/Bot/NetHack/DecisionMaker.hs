@@ -42,7 +42,8 @@ decisionMaker = forever $ do
 
   withAnswerer "Call a"
     (send "\n") $
-    runAbortAI_ (eatIfHungry <|>
+    runAbortAI_ (dywypi <|>
+                 eatIfHungry <|>
                  pursue "Going towards monster at " findMonsterKill <|>
                  pickUpSupplies <|>
                  pursue "Going towards an explorable at " findExplorablePath <|>
@@ -51,6 +52,13 @@ decisionMaker = forever $ do
                  findDownstairs <|>
                  searchAround <|>
                  error "nothing to do")
+
+dywypi :: (Alternative m, MonadAI m) => m ()
+dywypi = do
+  line <- getScreenLine 0
+  when (T.isInfixOf "Do you want your possessions identified?" line) $
+    send "q"
+  empty
 
 count :: Foldable f => (a -> Bool) -> f a -> Int
 count counter folding =
