@@ -18,6 +18,7 @@ module Bot.NetHack.InferWorldState
   where
 
 import Bot.NetHack.InferWorldState.PeacefulCheck
+import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
 import Bot.NetHack.ScreenPattern
 import Bot.NetHack.WorldState
@@ -47,9 +48,10 @@ inferWorldState messages = execStateT $ do
 
 inferTurnCount :: (MonadAI m, MonadState WorldState m) => m ()
 inferTurnCount =
-  matchf " T:([0-9]+) " >>= \case
-    [_whole, read -> turncount] -> turn .= turncount
-    _ -> return ()
+  matchf (regex " T:([0-9]+) ") >>= \case
+    [_whole, read -> turncount] ->
+      logTrace ("Turn is " <> show turncount) $ turn .= turncount
+    x -> logTrace ("Couldn't read turn count " <> show x) $ return ()
 
 inferLevelIndex :: MonadAI m => StateT WorldState m ()
 inferLevelIndex = do

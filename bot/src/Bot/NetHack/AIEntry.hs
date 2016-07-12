@@ -5,6 +5,7 @@
 
 module Bot.NetHack.AIEntry
   ( AIState()
+  , doesAILookLikeItsOscillating
   , botConfig
   , emptyAIState
   , stepAIState )
@@ -22,26 +23,41 @@ import Control.Monad.Trans.Free
 import Control.Monad.Trans.Free.Church
 import qualified Data.ByteString as B
 import qualified Data.IntMap.Strict as IM
+import Data.Time
 import Terminal.Screen
 
 data AIState = AIState
   { _botConfig :: !BotConfig
-  , _nextAction :: !(AI ()) }
+  , _nextAction :: !(AI ())
+  , _turnCountLastChanged :: !(Turn, UTCTime) }
 makeLenses ''AIState
 
-emptyAIState :: BotConfig -> AIState
-emptyAIState bc = AIState { _botConfig = bc
-                          , _nextAction = bot }
+doesAILookLikeItsOscillating :: MonadIO m => AIState -> m Bool
+doesAILookLikeItsOscillating ai = liftIO $ do
+  now <- getCurrentTime
+  return $ diffUTCTime now (ai^.turnCountLastChanged._2) > 20
 
-stepAIState :: ScreenState -> Int -> Int -> AIState -> (AIState, B.ByteString)
-stepAIState screenstate x y aistate =
-  runAI screenstate x y aistate (fromFT $ aistate^.nextAction)
+emptyAIState :: MonadIO m => BotConfig -> m AIState
+emptyAIState bc = liftIO $ do
+  now <- getCurrentTime
+  return $ AIState
+          { _botConfig = bc
+          , _nextAction = bot
+          , _turnCountLastChanged = (1, now) }
 
-runAI :: ScreenState -> Int -> Int -> AIState -> (FreeT AIF Identity ()) -> (AIState, B.ByteString)
-runAI screenstate w h aistate' (FreeT (Identity ai)) = case ai of
+stepAIState :: UTCTime -> ScreenState -> Int -> Int -> AIState -> (AIState, B.ByteString)
+stepAIState now screenstate x y aistate =
+  runAI now screenstate x y aistate (fromFT $ aistate^.nextAction)
+
+runAI :: UTCTime -> ScreenState -> Int -> Int -> AIState -> (FreeT AIF Identity ()) -> (AIState, B.ByteString)
+runAI now screenstate w h aistate' (FreeT (Identity ai)) = case ai of
   Pure () -> (aistate, B.empty)
-  Free (Yield next) -> runAI screenstate w h aistate next
-  Free (GetCurrentScreenState fun) -> runAI screenstate w h aistate (fun screenstate w h)
+  Free (ReportWorldState ws next) ->
+    if ws^.turn > aistate^.turnCountLastChanged._1
+      then runAI now screenstate w h (aistate & turnCountLastChanged .~ (ws^.turn, now)) next
+      else runAI now screenstate w h aistate next
+  Free (Yield next) -> runAI now screenstate w h aistate next
+  Free (GetCurrentScreenState fun) -> runAI now screenstate w h aistate (fun screenstate w h)
   Free (Send bs next) -> (aistate & nextAction .~ (toFT next), bs)
   Free (SendRaw bs next) -> (aistate & nextAction .~ (toFT next), bs)
  where
@@ -63,8 +79,15 @@ bot = do
   worldLoop emptyWorldState IM.empty decisionMaker
  where
   worldLoop old_state answermap maker = do
+    reportWorldState old_state
+
     (new_state1, msgs) <- exhaustMessages old_state (fromFT $ runWAI $ consumeMessages answermap)
+
+    reportWorldState new_state1
+
     new_state2 <- inferWorldState msgs new_state1
+
+    reportWorldState new_state2
 
     exhaust new_state2 msgs answermap (fromFT $ runWAI maker)
    where

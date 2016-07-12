@@ -41,6 +41,7 @@ import Terminal.Screen
 
 data AIF f
   = GetCurrentScreenState !(ScreenState -> Int -> Int -> f)
+  | ReportWorldState !WorldState f
   | Yield f
   | Send !B.ByteString f
   | SendRaw !B.ByteString f  -- Used by WAI, otherwise identically interpreted as Send
@@ -52,14 +53,17 @@ type AIT m a = FT AIF m a
 class Monad m => MonadAI m where
   send :: B.ByteString -> m ()
   currentScreen :: m (ScreenState, Int, Int)
+  reportWorldState :: WorldState -> m ()
 
 instance MonadAI (FT AIF m) where
   send bs = liftF $ Send bs ()
   currentScreen = liftF $ GetCurrentScreenState (\ss x y -> (ss, x, y))
+  reportWorldState ws = liftF $ ReportWorldState ws ()
 
 instance MonadAI m => MonadAI (StateT s m) where
   send = lift . send
   currentScreen = lift currentScreen
+  reportWorldState = lift . reportWorldState
 
 -- | Like `AI` but can exit early with its `Alternative` instance.
 newtype AbortAI m a = AbortAI (ExceptT () m a)
@@ -78,6 +82,7 @@ instance MonadWAI m => MonadWAI (AbortAI m) where
 instance MonadAI m => MonadAI (AbortAI m) where
   send bs = AbortAI $ lift $ send bs
   currentScreen = AbortAI $ lift $ currentScreen
+  reportWorldState ws = AbortAI $ lift $ reportWorldState ws
 
 instance Monad m => Alternative (AbortAI m) where
   empty = AbortAI $ throwE ()
@@ -165,6 +170,7 @@ instance Monad m => MonadAnswerer (WAI m) where
 instance MonadAI (WAI m) where
   send bs = WAI $ liftF $ Send bs ()
   currentScreen = WAI $ liftF $ GetCurrentScreenState (\ss x y -> (ss, x, y))
+  reportWorldState ws = WAI $ liftF $ ReportWorldState ws ()
 
 runWAI :: MonadAI m => WAI m a -> FT AIF (StateT (WorldState, [T.Text], IM.IntMap (T.Text, WAI m ())) m) a
 runWAI (WAI ff) = ff

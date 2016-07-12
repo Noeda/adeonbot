@@ -4,6 +4,7 @@
 
 module Bot.NetHack.WorldState
   ( WorldState(..)
+  , Turn
   , LevelIndex
   , emptyWorldState
   , levels
@@ -53,6 +54,7 @@ import qualified Data.Text as T
 import GHC.Generics
 
 type LevelIndex = Int
+type Turn = Int
 
 -- | This data represents what the bot thinks the world state is.
 --
@@ -65,7 +67,7 @@ data WorldState = WorldState
   , _statuses       :: !(S.Set Status)
   , _inventory      :: ![Item]
   , _inventoryDirty :: !Bool
-  , _turn           :: !Int }
+  , _turn           :: !Turn }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 data LevelMeta = LevelMeta

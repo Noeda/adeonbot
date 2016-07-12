@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
 
 module Bot.NetHack
@@ -11,15 +12,19 @@ import Bot.NetHack.Logs
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
+import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.State.Strict
 import Control.Monad.ST
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Data.Data
 import Data.Monoid
 import qualified Data.Text as T
+import Data.Time
 import Data.Yaml
+import GHC.Generics
 import System.Clock
 import System.Environment
 import System.Exit
@@ -28,6 +33,12 @@ import Terminal.Emulator
 import Terminal.Pty
 import Terminal.Screen
 import Terminal.Terminal
+
+-- | Thrown when oscillation detection kicks in
+data BotOscillated = BotOscillated
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+
+instance Exception BotOscillated
 
 runAdeonbot :: IO ()
 runAdeonbot = do
@@ -52,7 +63,9 @@ showUsage handle = do
   hPutStrLn handle "adeonbot [CONFIG FILE]"
 
 botEntry :: BotConfig -> STM (ScreenState, Int, Int, Integer) -> IO () -> (B.ByteString -> STM ()) -> IO ()
-botEntry config getNextStatus refresh send = aiLoop (emptyAIState config)
+botEntry config getNextStatus refresh send = do
+  aistate <- emptyAIState config
+  aiLoop aistate
  where
   aiLoop aistate = do
     status <- waitUntilCooldown
@@ -77,12 +90,37 @@ botEntry config getNextStatus refresh send = aiLoop (emptyAIState config)
       Just status -> return status
 
   botLogic (screenstate, cx, cy, _) aistate = do
-    let (new_aistate, sending) = stepAIState screenstate cx cy aistate
-    if B.null sending
-      then error "botEntry: AI decided not to send anything to NetHack. Panic."
-      else logTrace ("Sent " <> show sending) $
-             atomically $ send sending
-    return new_aistate
+    -- Oscillation check; has turn count changed in last N seconds?
+    now <- getCurrentTime
+    oscillates <- doesAILookLikeItsOscillating aistate
+    if oscillates
+      then sendBailoutString (atomically . send) >> throwIO BotOscillated
+      else do let (new_aistate, sending) = stepAIState now screenstate cx cy aistate
+              if B.null sending
+                then error "botEntry: AI decided not to send anything to NetHack. Panic."
+                else logTrace ("Sent " <> show sending) $
+                        atomically $ send sending
+              return new_aistate
+
+sendBailoutString :: (B.ByteString -> IO ()) -> IO ()
+sendBailoutString send = do
+  send "\x1b \x1b \x1b \x1b\n \n"
+  threadDelay 500000
+  send "\x1b \x1b \x1b \x1b\n \n"
+  threadDelay 500000
+  send "\x1b \x1b \x1b \x1b\n \n"
+  threadDelay 500000
+  send "\x1b \x1b \x1b \x1b\n \n"
+  threadDelay 500000
+  send "#quit\n"
+  threadDelay 500000
+  send "y"
+  threadDelay 500000
+  send "q q q q q q \x1b"
+  threadDelay 500000
+  send "q   q   q   \x1b"
+  threadDelay 500000
+  send "            \x1b"
 
 run :: BotConfig -> IO ()
 run config = withRawTerminalMode $ do
