@@ -216,7 +216,8 @@ inferCurrentlyStandingSquare lvl msgs = do
      (lcell^?_Just.cellItems == Just PileSeen) ||
      (any (T.isInfixOf "You see here") msgs) ||
      (any (T.isInfixOf "You feel here") msgs)
-    then checkFloor cx cy
+    then do new_lvl <- checkFloor cx cy
+            return $ new_lvl & statues %~ S.delete (cx, cy) -- Rely on item pile statue, not the off-the-line statue info
     else return lvl
  where
   skipEngravings = do
@@ -437,14 +438,30 @@ inferLevel lvl msgs = do
 
       new_boulders = inferBoulders ss
 
+      new_statues = inferStatues ss (lvl^.statues)
+
       new_monsters = inferMonsters ss lvl (cx, cy) (lvl^.monsters)
 
   let updated_lvl = lvl & (cells .~ new_cells) .
                           (boulders .~ new_boulders) .
-                          (monsters .~ new_monsters)
+                          (monsters .~ new_monsters) .
+                          (statues .~ new_statues)
 
   inferCurrentlyStandingSquare updated_lvl msgs
  where
+  inferStatues ss old_statues = do
+    -- This one removes statues from squares that don't look like statues anymore
+    -- Settings new statues is handled elsewhere (with farlook, and looking at item piles)
+    foldl' folding old_statues levelSquares
+   where
+    folding statues (x, y) =
+      let cell = getCell x y ss
+       in if foregroundColor cell /= White ||
+             backgroundColor cell /= Black ||
+             not (isMonsterSymbol $ T.head (contents cell))
+            then S.delete (x, y) statues
+            else statues
+
   inferBoulders :: ScreenState -> S.Set (Int, Int)
   inferBoulders ss = foldl' folding S.empty [(x, y) | x <- [0..sw-1], y <- [1..sh-3]]
    where
@@ -503,7 +520,16 @@ inferLevel lvl msgs = do
             _ -> Nothing
 
       case inferred of
-        Nothing ->
+        Nothing -> do
+          -- Remove InkyBlackness if there's an item in there
+          let resetInkyBlackness = if old_cell^.cellFeature == Just InkyBlackness
+                                     then cellFeature .~ Nothing
+                                     else id
+
+          A.writeArray mutcells (column, row) (old_cell & resetInkyBlackness)
+
+          old_cell <- A.readArray mutcells (column, row)
+
           -- If we can't infer any new information then maybe we can infer
           -- something about items?
           when (isItemSymbol (contents cell) (foregroundColor cell)) $ do
@@ -514,7 +540,8 @@ inferLevel lvl msgs = do
             when ((old_cell^.cellItemAppearanceLastTime) /= scell) $
               A.writeArray mutcells (column, row)
                 (old_cell & (cellItems .~ PileSeen) .
-                            (cellItemAppearanceLastTime .~ scell))
+                            (cellItemAppearanceLastTime .~ scell) .
+                            resetInkyBlackness)
 
         Just new_feature -> do
           old_cell <- A.readArray mutcells (column, row)

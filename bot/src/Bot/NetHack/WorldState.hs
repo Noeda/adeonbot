@@ -18,6 +18,7 @@ module Bot.NetHack.WorldState
   , levelDescription
   , branchName
   , Level(..)
+  , statues
   , whereSearchedLastTime
   , hasStatue
   , emptyLevel
@@ -78,6 +79,7 @@ data LevelMeta = LevelMeta
 data Level = Level
   { _cells    :: !(A.Array (Int, Int) LevelCell)
   , _whereSearchedLastTime :: !(Maybe (Int, Int, Int))
+  , _statues :: !(S.Set (Int, Int))
   , _boulders :: !(S.Set (Int, Int))
   , _monsters :: !(M.Map (Int, Int) MonsterImage) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
@@ -192,12 +194,15 @@ emptyLevel = Level
   { _cells = A.listArray ((0, 0), (79, 21)) (repeat emptyLevelCell)
   , _whereSearchedLastTime = Nothing
   , _boulders = S.empty
+  , _statues = S.empty
   , _monsters = M.empty }
 
 hasStatue :: Level -> (Int, Int) -> Bool
-hasStatue lvl pos = fromMaybe False $ do
+hasStatue lvl pos = fromMaybe False (do
   itemimage <- lvl^?cells.ix pos.cellItems
   return $ case itemimage of
     Pile items -> any (== Statue) items
-    _ -> False
+    _ -> False) ||
+
+  pos `S.member` (lvl^.statues)
 

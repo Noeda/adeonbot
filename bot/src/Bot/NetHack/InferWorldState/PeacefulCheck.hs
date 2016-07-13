@@ -14,6 +14,7 @@ import Control.Monad.State.Strict
 import qualified Data.ByteString as B
 import Data.Char ( ord )
 import Data.Monoid
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Word
 import Text.Regex.TDFA
@@ -47,6 +48,9 @@ checkPeacefulness (x, y) = do
 
   -- Some sanity check that the thing we expected to happen after ; clicking
   -- actually resulted in a monster being looked up.
+  --
+
+  let ll = levels.at (cl^.currentLevel)._Just
 
   line <- getScreenLine 0
   when (T.index line 1 == ' ' && T.index line 0 /= ' ') $ do
@@ -54,8 +58,10 @@ checkPeacefulness (x, y) = do
       [[_whole, T.pack -> monname]] -> do
         -- Is it a statue?
         if T.isInfixOf "statue of" monname
-          then levels.at (cl^.currentLevel)._Just.monsters.at (x, y) .= Nothing
+          then do ll.monsters.at (x, y) .= Nothing
+                  ll.statues %= S.insert (x, y)
           else do let is_peaceful = T.isInfixOf "peaceful" monname
-                  levels.at (cl^.currentLevel)._Just.monsters.at (x, y)._Just.isPeaceful .= Just is_peaceful
+                  ll.monsters.at (x, y)._Just.isPeaceful .= Just is_peaceful
+                  ll.statues %= S.delete (x, y)
       _ -> return ()
 
