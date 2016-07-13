@@ -52,7 +52,10 @@ checkPeacefulness (x, y) = do
   when (T.index line 1 == ' ' && T.index line 0 /= ' ') $ do
     case T.unpack line =~ (" \\((.+)\\) " :: String) of
       [[_whole, T.pack -> monname]] -> do
-        let is_peaceful = T.isInfixOf "peaceful" monname
-        levels.at (cl^.currentLevel)._Just.monsters.at (x, y)._Just.isPeaceful .= Just is_peaceful
+        -- Is it a statue?
+        if T.isInfixOf "statue of" monname
+          then levels.at (cl^.currentLevel)._Just.monsters.at (x, y) .= Nothing
+          else do let is_peaceful = T.isInfixOf "peaceful" monname
+                  levels.at (cl^.currentLevel)._Just.monsters.at (x, y)._Just.isPeaceful .= Just is_peaceful
       _ -> return ()
 

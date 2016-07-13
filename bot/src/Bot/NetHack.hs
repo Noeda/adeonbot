@@ -76,7 +76,7 @@ botEntry config end_of_data_tvar getNextStatus refresh send = do
   waitUntilCooldown = do
     now <- toNanoSecs <$> getTime Monotonic
     let accepted_time = now - fromIntegral (latency config)
-        accepted_time_with_endofdata = now - fromIntegral 20000000
+        accepted_time_with_endofdata = now - fromIntegral 40000000
 
     maybestatus <- atomically $ do
       st@(_, _, _, timing) <- getNextStatus

@@ -594,7 +594,7 @@ looksLikeMonster _ _ (Cell{..}) | T.length contents /= 1 = False
 looksLikeMonster _ _ (Cell{..}) | not (isMonsterSymbol $ T.head contents) = False
 looksLikeMonster lvl pos (Cell{..}) =
   if | foregroundColor == White && backgroundColor == Black &&
-       hasStatue lvl pos == True -> False
+       hasStatue lvl pos -> False
      | otherwise -> True
 
 inferSquare :: MonadState WorldState m => (Int, Int) -> (LevelFeature -> LevelFeature) -> m ()

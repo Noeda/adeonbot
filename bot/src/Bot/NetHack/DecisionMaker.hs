@@ -53,11 +53,14 @@ decisionMaker = forever $ do
                  searchAround <|>
                  logError "nothing to do")
 
-dywypi :: (Alternative m, MonadAI m) => m ()
+dywypi :: (Alternative m, MonadWAI m) => m ()
 dywypi = do
   line <- getScreenLine 0
-  when (T.isInfixOf "Do you want your possessions identified?" line) $
-    send "q"
+  when (T.isInfixOf "Do you want your possessions identified?" line) $ do
+    sendRaw "q"
+    sendRaw " "
+    sendRaw " "
+    error "dywypi: I died"
   empty
 
 count :: Foldable f => (a -> Bool) -> f a -> Int
