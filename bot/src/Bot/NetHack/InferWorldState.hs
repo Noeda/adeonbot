@@ -200,7 +200,7 @@ inferCurrentLevel messages = do
       updated_lvl <- inferLevel lvl messages
       levels.at cl .= Just updated_lvl
       inferPeacefulnessOfMonsters
-    _ -> error "Impossible"
+    _ -> logError "inferCurrentLevel: Impossible"
 
 inferCurrentlyStandingSquare :: MonadAI m => Level -> [T.Text] -> StateT WorldState m Level
 inferCurrentlyStandingSquare lvl msgs = do

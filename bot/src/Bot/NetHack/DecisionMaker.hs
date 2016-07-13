@@ -51,7 +51,7 @@ decisionMaker = forever $ do
                  findLockedDoors <|>
                  findDownstairs <|>
                  searchAround <|>
-                 error "nothing to do")
+                 logError "nothing to do")
 
 dywypi :: (Alternative m, MonadAI m) => m ()
 dywypi = do

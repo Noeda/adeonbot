@@ -62,8 +62,8 @@ showUsage handle = do
   hPutStrLn handle "Usage:"
   hPutStrLn handle "adeonbot [CONFIG FILE]"
 
-botEntry :: BotConfig -> STM (ScreenState, Int, Int, Integer) -> IO () -> (B.ByteString -> STM ()) -> IO ()
-botEntry config getNextStatus refresh send = do
+botEntry :: BotConfig -> EndOfDataVar -> STM (ScreenState, Int, Int, Integer) -> IO () -> (B.ByteString -> STM ()) -> IO ()
+botEntry config end_of_data_tvar getNextStatus refresh send = do
   aistate <- emptyAIState config
   aiLoop aistate
  where
@@ -76,12 +76,16 @@ botEntry config getNextStatus refresh send = do
   waitUntilCooldown = do
     now <- toNanoSecs <$> getTime Monotonic
     let accepted_time = now - fromIntegral (latency config)
+        accepted_time_with_endofdata = now - fromIntegral 20000000
 
     maybestatus <- atomically $ do
       st@(_, _, _, timing) <- getNextStatus
-      return $ if timing > accepted_time
-        then Nothing
-        else Just st
+      end_of_data_received <- isMarked end_of_data_tvar
+      let at = if end_of_data_received then accepted_time_with_endofdata
+                                         else accepted_time
+      if timing > at
+        then return Nothing
+        else acquireEndOfData end_of_data_tvar >> return (Just st)
 
     case maybestatus of
       Nothing -> do
@@ -97,7 +101,7 @@ botEntry config getNextStatus refresh send = do
       then sendBailoutString (atomically . send) >> throwIO BotOscillated
       else do let (new_aistate, sending) = stepAIState now screenstate cx cy aistate
               if B.null sending
-                then error "botEntry: AI decided not to send anything to NetHack. Panic."
+                then logError "botEntry: AI decided not to send anything to NetHack. Panic."
                 else logTrace ("Sent " <> show sending) $
                         atomically $ send sending
               return new_aistate
@@ -122,9 +126,30 @@ sendBailoutString send = do
   threadDelay 500000
   send "            \x1b"
 
+newtype EndOfDataVar = EndOfDataVar (TVar (Bool, Bool))
+
+markEndOfData :: EndOfDataVar -> STM ()
+markEndOfData (EndOfDataVar tvar) = modifyTVar tvar $ \(marked, busy) ->
+  if busy
+    then (marked, True)
+    else (True, False)
+
+isMarked :: EndOfDataVar -> STM Bool
+isMarked (EndOfDataVar tvar) = do
+  (marked, _) <- readTVar tvar
+  return marked
+
+acquireEndOfData :: EndOfDataVar -> STM ()
+acquireEndOfData (EndOfDataVar tvar) = writeTVar tvar (False, True)
+
+releaseEndOfData :: EndOfDataVar -> STM ()
+releaseEndOfData (EndOfDataVar tvar) = writeTVar tvar (False, False)
+
 run :: BotConfig -> IO ()
 run config = withRawTerminalMode $ do
   let cmd = fmap T.unpack $ nethackCommand config
+
+  end_of_data_tvar <- EndOfDataVar <$> newTVarIO (False, False)
 
   now <- toNanoSecs <$> getTime Monotonic
   status_tvar <- newTVarIO (emptyScreenState 80 24, 0, 0, now)
@@ -139,7 +164,10 @@ run config = withRawTerminalMode $ do
     -- Give some time for command to warm up (like connecting to NAO)
     threadDelay 2000000
 
-    withAsync (botEntry config get_next_status refresh write_output >> killThread tid) $ \bot_async -> do
+    let write_output_s bs = do releaseEndOfData end_of_data_tvar
+                               write_output bs
+
+    withAsync (botEntry config end_of_data_tvar get_next_status refresh write_output_s >> killThread tid) $ \bot_async -> do
       liftIO $ link bot_async
 
       withAsync (forever $ do
@@ -148,15 +176,20 @@ run config = withRawTerminalMode $ do
 
         bs <- liftIO $ atomically read_input
         (st, emu, cx, cy) <- get
-        let (new_st, new_emu, new_cx, new_cy) = runST $ do
+
+        let ((new_st, new_emu, new_cx, new_cy), stm) = runST $ do
                                   thawed <- thawScreen st
-                                  exhaust thawed st bs emu cx cy
+                                  exhaust thawed st bs emu cx cy end_of_data_tvar
+        liftIO $ do
+          now <- toNanoSecs <$> getTime Monotonic
+          atomically $ do
+            writeTVar status_tvar (new_st, new_cx, new_cy, now)
+            stm
+
         put (new_st, new_emu, new_cx, new_cy)
         liftIO $ do
           BL.putStr (toANSIOutput Nothing new_st)
           hFlush stdout
-          now <- toNanoSecs <$> getTime Monotonic
-          atomically $ writeTVar status_tvar (new_st, new_cx, new_cy, now)
  where
   exhaust :: ScreenStateMut s
           -> ScreenState
@@ -164,28 +197,34 @@ run config = withRawTerminalMode $ do
           -> Emulator ()
           -> Int
           -> Int
-          -> ST s (ScreenState, Emulator (), Int, Int)
-  exhaust thawed st bs emu cx cy = do
+          -> EndOfDataVar
+          -> ST s ((ScreenState, Emulator (), Int, Int), STM ())
+  exhaust thawed st bs emu cx cy end_of_data_tvar = do
     case emu of
-      Pure () -> error "impossible!"
+      Pure () -> logError "impossible!"
 
       Free (UpdateCursorPosition x y next) ->
-        exhaust thawed st bs next x y
+        exhaust thawed st bs next x y end_of_data_tvar
+
+      Free (YieldEndOfData next) -> do
+        (r, io) <- exhaust thawed st bs next cx cy end_of_data_tvar
+        return (r, io >> markEndOfData end_of_data_tvar)
 
       Free (ReadByte fun) ->
         if B.null bs
           then do new_st <- freezeScreen thawed
-                  return (new_st, emu, cx, cy)
-          else exhaust thawed st (B.tail bs) (fun $ B.head bs) cx cy
+                  return ((new_st, emu, cx, cy), return ())
+          else exhaust thawed st (B.tail bs) (fun $ B.head bs) cx cy end_of_data_tvar
 
       Free (PeekByte fun) -> do
         if B.null bs
           then do new_st <- freezeScreen thawed
-                  return (new_st, emu, cx, cy)
-          else exhaust thawed st bs (fun $ B.head bs) cx cy
+                  return ((new_st, emu, cx, cy), return ())
+          else exhaust thawed st bs (fun $ B.head bs) cx cy end_of_data_tvar
 
       Free (YieldChange mut next) -> do
-        mut thawed >> exhaust thawed st bs next cx cy
+        mut thawed >> exhaust thawed st bs next cx cy end_of_data_tvar
+
       Free (GetCurrentState fun)  -> do
-        exhaust thawed st bs (fun st) cx cy
+        exhaust thawed st bs (fun st) cx cy end_of_data_tvar
 

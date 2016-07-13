@@ -26,12 +26,15 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Word
 import GHC.Generics
+import System.IO
+import System.IO.Unsafe
 import Terminal.Screen
 
 data EmulatorF f
   = UpdateCursorPosition !Int !Int f
   | ReadByte (Word8 -> f)
   | PeekByte (Word8 -> f)
+  | YieldEndOfData f
   | YieldChange (forall s. ScreenStateMut s -> ST s ()) f
   | GetCurrentState (ScreenState -> f)
   deriving ( Functor, Typeable )
@@ -42,6 +45,7 @@ class Monad m => MonadEmulator m where
   updateCursorPosition :: Int -> Int -> m ()
   readByte :: m Word8
   peekByte :: m Word8
+  yieldEndOfData :: m ()
   yield :: (forall s. ScreenStateMut s -> ST s ()) -> m ()
   getScreenState :: m ScreenState
 
@@ -49,6 +53,7 @@ instance MonadEmulator (Free EmulatorF) where
   updateCursorPosition x y = liftF $ UpdateCursorPosition x y ()
   readByte = liftF $ ReadByte id
   peekByte = liftF $ PeekByte id
+  yieldEndOfData = liftF $ YieldEndOfData ()
   yield fun = liftF $ YieldChange fun ()
   getScreenState = liftF $ GetCurrentState id
 
@@ -56,6 +61,7 @@ instance MonadEmulator m => MonadEmulator (StateT s m) where
   updateCursorPosition x y = lift $ updateCursorPosition x y
   readByte = lift readByte
   peekByte = lift peekByte
+  yieldEndOfData = lift yieldEndOfData
   yield fun = lift $ yield fun
   getScreenState = lift getScreenState
 
@@ -155,6 +161,10 @@ handleQuestionSequence numbers "h" = for_ numbers $ \case
 handleQuestionSequence _ _ = return ()
 
 handleEscapeSequence :: MonadEmulator m => [Int] -> T.Text -> StateT EmulatorState m ()
+
+-- vt_tiledata extension for NetHack
+handleEscapeSequence [1, 3] "z" = lift $ yieldEndOfData
+handleEscapeSequence _ "z" = return ()
 
 -- Reset Mode (RM)
 handleEscapeSequence _ "l" = return ()

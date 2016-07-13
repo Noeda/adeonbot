@@ -13,6 +13,7 @@ module Bot.NetHack.AIEntry
 
 import Bot.NetHack.Config
 import Bot.NetHack.DecisionMaker
+import Bot.NetHack.Logs
 import Bot.NetHack.Messages
 import Bot.NetHack.MonadAI
 import Bot.NetHack.InferWorldState
@@ -69,11 +70,11 @@ serverLogin :: MonadAI m => BotConfig -> m Bool
 serverLogin bc = matchfirst $
   [ ("l) Login", send "l")
   , ("Please enter your username", send ( (T.encodeUtf8 $ playername bc) <> "\n" ))
-  , ("1) Go to NetHack 3.6.0 menu", send "1")   -- NAO
-  , ("p) Play NetHack 3.6.0", send "p") ] ++ password_item
+  , ("3) Go to NetHack 3.6.1-dev menu", send "3")   -- NAO
+  , ("p) Play NetHack 3.6.1-DEV", send "p") ] ++ password_item
  where
   password_item = case password bc of
-    Nothing -> [ ("Please enter your password", error "serverLogin: password asked but not set in yaml config.") ]
+    Nothing -> [ ("Please enter your password", logError "serverLogin: password asked but not set in yaml config.") ]
     Just pw -> [ ("Please enter your password", send ( T.encodeUtf8 pw <> "\n" )) ]
 
 characterCreation :: MonadAI m => m Bool
@@ -128,7 +129,7 @@ bot bc = do
     exhaust new_state msgs answermap (FreeT maker) = do
       (item, (new_world, _, new_answermap)) <- runStateT maker (new_state, msgs, answermap)
       case item of
-        Pure () -> error "decisionMaker ran out."
+        Pure () -> logError "decisionMaker ran out."
 
         Free (ReportWorldState _ next) -> exhaust new_state msgs answermap next
 

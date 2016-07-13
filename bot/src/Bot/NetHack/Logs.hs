@@ -1,5 +1,6 @@
 module Bot.NetHack.Logs
-  ( logTrace )
+  ( logTrace
+  , logError )
   where
 
 import Control.Concurrent.MVar
@@ -19,6 +20,12 @@ botlogHandle = unsafePerformIO $ do
   f <- openFile "botlog.txt" AppendMode
   putLogLine "Log opened" f
   newMVar f
+
+logError :: String -> a
+logError str =
+  let x = unsafePerformIO $ withMVar botlogHandle $ \handle -> do
+            putLogLine ("ERROR: " <> str) handle
+   in x `seq` error str
 
 -- | Magic function that causes a line to be written in a logfile before
 -- returning the result.
