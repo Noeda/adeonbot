@@ -82,13 +82,13 @@ pickUpSupplies = do
   wstate <- askWorldState
   lvl <- getCurrentLevel wstate
   let inv = wstate^.inventory
-      num_food_items = count (== Food) inv
+      num_food_items = count isFood inv
 
   when (num_food_items >= 5) empty
 
   -- Find closest food item on the level
   let has_food iimage = case iimage of
-                          Pile items -> any (== Food) items
+                          Pile items -> any isFood items
                           _ -> False
       food_item_piles = S.fromList $
                         filter (\(x, y) -> fmap has_food (lvl^?cells.ix (x, y).cellItems) == Just True)
@@ -111,7 +111,7 @@ pickUpSupplies = do
       if T.isInfixOf "There is nothing here to pick up." line
         then modWorld (execState (inferItemPileImage (cx, cy) NoPile)) >> empty
         else do void $ selectManyItems (\item counter -> case item of
-                  Food | counter < 5 ->
+                  item | isFood item && counter < 5 ->
                     logTrace ("Picking up food item (" <> show counter <> " -> " <> show (counter+1) <> ")")
                              (1, counter+1)
                   _ -> (0, counter)) num_food_items
@@ -252,7 +252,7 @@ eatIfHungry = do
     unless (T.isInfixOf "What do you want to eat" line) $
       logTrace ("Unexpected response to 'e' command: " <> show line) empty
     sendRaw "*"
-    bsm <- selectItem (== Food)
+    bsm <- selectItem isFood
     wstate <- askWorldState
     let inv = wstate^.inventory
     case bsm of
@@ -325,9 +325,17 @@ findClosedDoors = do
     (\d pos -> logTrace ("Moving towards closed door at. " <> show pos) $ send d)
 
 findLockedDoors :: (Alternative m, MonadWAI m) => m ()
-findLockedDoors =
+findLockedDoors = do
+  wstate <- askWorldState
+  when (hasSoreLegs wstate) empty
+
   findWayToFeatures LockedDoor
-    (\d pos -> logTrace ("Kicking door at " <> show (d, pos)) $ send $ "\x04" <> d)
+    (\d pos -> do
+        logTrace ("Kicking door at " <> show (d, pos)) $ send $ "\x04" <> d
+        msgs <- askMessages
+        when (any (T.isInfixOf "is in no shape for kicking") msgs) $ do
+          modWorld $ execState $ inferSoreLegs 40
+          empty)
     (\d pos -> logTrace ("Moving towards locked door at " <> show (d, pos)) $ send d)
 
 findWayToFeatures :: (Alternative m, MonadWAI m)

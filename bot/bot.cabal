@@ -16,6 +16,7 @@ library
                        Bot.NetHack.Config
                        Bot.NetHack.DecisionMaker
                        Bot.NetHack.InferWorldState
+                       Bot.NetHack.InferWorldState.ItemNameParser
                        Bot.NetHack.InferWorldState.PeacefulCheck
                        Bot.NetHack.Logs
                        Bot.NetHack.Messages
@@ -48,8 +49,7 @@ executable adeonbot
   main-is:             Main.hs
   build-depends:       base
                       ,bot
-  --ghc-options:         -Wall -fno-warn-name-shadowing -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
-  ghc-options:         -Wall -fno-warn-name-shadowing -threaded
+  ghc-options:         -Wall -fno-warn-name-shadowing -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
   hs-source-dirs:      exe
   default-language:    Haskell2010
 

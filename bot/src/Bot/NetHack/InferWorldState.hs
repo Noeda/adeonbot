@@ -11,12 +11,14 @@ module Bot.NetHack.InferWorldState
   , inferSearch
   , inferPeaceful
   , inferItemPileImage
+  , inferSoreLegs
   , dirtyInventory
   , setLastSearchedPosition
   , nameToItem
   , levelSquares )
   where
 
+import Bot.NetHack.InferWorldState.ItemNameParser
 import Bot.NetHack.InferWorldState.PeacefulCheck
 import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
@@ -28,13 +30,11 @@ import qualified Data.Array.MArray as A
 import qualified Data.Array.ST as A
 import Data.Foldable
 import qualified Data.IntMap.Strict as IM
-import Data.List
 import qualified Data.Map.Strict as M
 import Data.Maybe
 import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Text.Regex.TDFA hiding ( match )
 import Data.Traversable ( for )
 import Terminal.Screen
 
@@ -324,76 +324,6 @@ inferItemsBeingLookedAt _ = do
         -- This shouldn't happen. But maybe it did anyway?
         return NoPile
 
-nameToItem :: T.Text -> Item
-nameToItem txt | T.isInfixOf "statue of" txt = Statue
-nameToItem (T.strip -> txt'') = case name of
-  "food ration" -> Food
-  "food rations" -> Food
-  "gunyoki" -> Food
-  "slime mold" -> Food
-  "slime molds" -> Food
-  "lembas wafer" -> Food
-  "lembas wafers" -> Food
-  "lichen corpse" -> Food
-  "lichen corpses" -> Food
-  "K-ration" -> Food
-  "K-rations" -> Food
-  "C-ration" -> Food
-  "C-rations" -> Food
-  "cream pie" -> Food
-  "cream pies" -> Food
-  "candy bar" -> Food
-  "candy bars" -> Food
-  "pancake" -> Food
-  "pancakes" -> Food
-  "melon" -> Food
-  "melons" -> Food
-  _ -> StrangeItem
- where
-  txt' = T.unpack txt''
-
-  txt_article_removed = if isPrefixOf "a " txt'
-                          then drop 2 txt'
-                          else (if isPrefixOf "an " txt'
-                                  then drop 3 txt'
-                                  else (if isPrefixOf "the " txt'
-                                          then drop 4 txt'
-                                          else txt'))
-
-  (quentity, txt_quantity_removed) = case txt_article_removed =~ ("([0-9]+) (.+)" :: String) of
-    [[_whole, quantity, rest]] -> (read quantity, rest)
-
-    _ -> (1, txt_article_removed)
-
-  (buc, txt_buc_removed) = if isPrefixOf "uncursed " txt_quantity_removed
-                             then (Just Uncursed, drop 9 txt_quantity_removed)
-                             else (if isPrefixOf "blessed " txt_quantity_removed
-                                     then (Just Blessed, drop 8 txt_quantity_removed)
-                                     else (if isPrefixOf "cursed " txt_quantity_removed
-                                             then (Just Cursed, drop 7 txt_quantity_removed)
-                                             else (Nothing, txt_quantity_removed)))
-
-  (enchantment, enchantment_removed) = case txt_buc_removed =~ ("(\\+|\\-)([0-9]+) (.+)" :: String) of
-    [[_whole, sign, enchantment, rest]] ->
-      (if sign == "-"
-         then negate $ read enchantment
-         else read enchantment
-      ,rest)
-
-    _ -> (0, txt_buc_removed)
-
-  -- foodstuff
-  (is_partly_eaten, partlyeaten_removed) = if isPrefixOf "partly eaten " enchantment_removed
-    then (True, drop 13 enchantment_removed)
-    else (False, enchantment_removed)
-
-  -- wizard mode
-  weight_removed = case partlyeaten_removed =~ ("(.+) \\([0-9]+ aum\\)" :: String) of
-    [[_whole, first_part]] -> first_part
-    _ -> partlyeaten_removed
-
-  name = weight_removed
-
 descriptionToLevelFeature :: T.Text -> Maybe LevelFeature
 descriptionToLevelFeature "staircase up" = Just Upstairs
 descriptionToLevelFeature "staircase down" = Just Downstairs
@@ -679,4 +609,9 @@ inferItemPileImage (cx, cy) pile = do
   cl <- get
   modify $ (levels.at (cl^.currentLevel)._Just.cells.ix (cx, cy).cellItems .~ pile) .
            (levels.at (cl^.currentLevel)._Just.cells.ix (cx, cy).cellItemAppearanceLastTime .~ "")
-  
+
+inferSoreLegs :: MonadState WorldState m => Turn -> m ()
+inferSoreLegs this_many_turns = do
+  current_turn <- use turn
+  soreLegsUntil .= current_turn + this_many_turns
+

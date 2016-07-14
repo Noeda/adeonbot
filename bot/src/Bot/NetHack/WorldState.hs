@@ -1,12 +1,15 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Bot.NetHack.WorldState
   ( WorldState(..)
   , Turn
   , Hitpoints
   , LevelIndex
+  , hasSoreLegs
+  , soreLegsUntil
   , hp
   , maxHP
   , emptyWorldState
@@ -44,7 +47,20 @@ module Bot.NetHack.WorldState
   , Status(..)
   , ItemPileImage(..)
   , ItemPile
-  , Item(..) )
+  , Item(..)
+  , ItemIdentity(..)
+  , isFood
+  , armor
+  , ArmorSlot(..)
+  , ArmorSpecial(..)
+  , CorrosionLevel
+  , EnchantmentLevel
+  , unlocksDoors
+  , buc
+  , enchantment
+  , corrosion
+  , quantity
+  , itemIdentity )
   where
 
 import Control.Lens hiding ( Level, levels )
@@ -60,6 +76,8 @@ import GHC.Generics
 type LevelIndex = Int
 type Turn = Int
 type Hitpoints = Int
+type CorrosionLevel = Int
+type EnchantmentLevel = Int
 
 -- | This data represents what the bot thinks the world state is.
 --
@@ -72,6 +90,7 @@ data WorldState = WorldState
   , _statuses       :: !(S.Set Status)
   , _inventory      :: ![Item]
   , _inventoryDirty :: !Bool
+  , _soreLegsUntil  :: !Turn
   , _hp             :: !Hitpoints
   , _maxHP          :: !Hitpoints
   , _turn           :: !Turn }
@@ -159,13 +178,51 @@ data ItemPileImage
 
 type ItemPile = [Item]
 
-data Item
-  = Weapon !Int    -- Weapon and its damage
-  | Armor !Int     -- Armor and the AC it gives
+data Item = Item
+  { _itemIdentity :: !ItemIdentity
+  , _enchantment :: !(Maybe EnchantmentLevel)
+  , _corrosion :: !CorrosionLevel
+  , _quantity :: !Int
+  , _buc :: !(Maybe BUC) }
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+
+data ArmorSlot
+  = Helmet
+  | Gloves
+  | Body
+  | Shoes
+  | TShirt
+  | Shield
+  | Cloak
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
+data ArmorSpecial
+  = MagicResistance
+  | Reflection
+  | NoSpecials
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
+armor :: Int -> ArmorSlot -> ItemIdentity
+armor ac slot = Armor ac slot NoSpecials
+
+data ItemIdentity
+  = Weapon !Int    -- Weapon; damage and base damage
+  | Armor !Int !ArmorSlot !ArmorSpecial
   | Food           -- Safe food item
+  | PickAxe        -- Pick-axe, nice murder weapon
+  | Key            -- Can lock and unlock doors
+  | CreditCard     -- Can unlock doors
+  | MagicMarker    -- Nice!
+  | NonTonalInstrument    -- drums
+  | ScaryTonalInstrument  -- tooled horn
   | Statue
   | StrangeItem    -- No idea what this item is.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+
+unlocksDoors :: ItemIdentity -> Bool
+unlocksDoors Key = True
+unlocksDoors CreditCard = True
+unlocksDoors _ = False
 
 data MonsterImage = MonsterImage
   { _monster :: !Monster
@@ -175,6 +232,7 @@ data MonsterImage = MonsterImage
 makeLenses ''MonsterImage
 makeLenses ''Level
 makeLenses ''LevelCell
+makeLenses ''Item
 makeLenses ''WorldState
 makeLenses ''LevelMeta
 
@@ -184,6 +242,7 @@ emptyWorldState = WorldState
   , _levelMeta = IM.empty
   , _statuses = S.empty
   , _currentLevel = 1
+  , _soreLegsUntil = 1
   , _hp = 1
   , _maxHP = 1
   , _inventory = []
@@ -209,8 +268,15 @@ hasStatue :: Level -> (Int, Int) -> Bool
 hasStatue lvl pos = fromMaybe False (do
   itemimage <- lvl^?cells.ix pos.cellItems
   return $ case itemimage of
-    Pile items -> any (== Statue) items
+    Pile items -> any ((== Statue) . _itemIdentity) items
     _ -> False) ||
 
   pos `S.member` (lvl^.statues)
+
+isFood :: Item -> Bool
+isFood (_itemIdentity -> Food) = True
+isFood _ = False
+
+hasSoreLegs :: WorldState -> Bool
+hasSoreLegs wstate = wstate^.soreLegsUntil <= wstate^.turn
 
