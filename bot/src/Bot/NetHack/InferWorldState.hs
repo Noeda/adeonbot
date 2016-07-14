@@ -43,8 +43,17 @@ import Terminal.Screen
 inferWorldState :: MonadAI m => [T.Text] -> WorldState -> m WorldState
 inferWorldState messages = execStateT $ do
   inferTurnCount
+  inferHitpoints
   inferStatuses
   inferCurrentLevel messages
+
+inferHitpoints :: (MonadAI m, MonadState WorldState m) => m ()
+inferHitpoints =
+  matchf (regex " HP:([0-9]+)\\(([0-9]+)\\) ") >>= \case
+    [_whole, read -> hp', read -> maxhp'] -> do
+      hp .= hp'
+      maxHP .= maxhp'
+    _ -> return ()
 
 inferTurnCount :: (MonadAI m, MonadState WorldState m) => m ()
 inferTurnCount =
@@ -320,6 +329,7 @@ nameToItem txt | T.isInfixOf "statue of" txt = Statue
 nameToItem (T.strip -> txt'') = case name of
   "food ration" -> Food
   "food rations" -> Food
+  "gunyoki" -> Food
   "slime mold" -> Food
   "slime molds" -> Food
   "lembas wafer" -> Food

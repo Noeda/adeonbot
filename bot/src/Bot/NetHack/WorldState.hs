@@ -5,7 +5,10 @@
 module Bot.NetHack.WorldState
   ( WorldState(..)
   , Turn
+  , Hitpoints
   , LevelIndex
+  , hp
+  , maxHP
   , emptyWorldState
   , levels
   , levelMeta
@@ -56,6 +59,7 @@ import GHC.Generics
 
 type LevelIndex = Int
 type Turn = Int
+type Hitpoints = Int
 
 -- | This data represents what the bot thinks the world state is.
 --
@@ -68,6 +72,8 @@ data WorldState = WorldState
   , _statuses       :: !(S.Set Status)
   , _inventory      :: ![Item]
   , _inventoryDirty :: !Bool
+  , _hp             :: !Hitpoints
+  , _maxHP          :: !Hitpoints
   , _turn           :: !Turn }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
@@ -178,6 +184,8 @@ emptyWorldState = WorldState
   , _levelMeta = IM.empty
   , _statuses = S.empty
   , _currentLevel = 1
+  , _hp = 1
+  , _maxHP = 1
   , _inventory = []
   , _inventoryDirty = True
   , _turn = 1 }

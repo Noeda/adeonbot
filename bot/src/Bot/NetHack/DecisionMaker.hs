@@ -45,6 +45,7 @@ decisionMaker = forever $ do
     runAbortAI_ (dywypi <|>
                  eatIfHungry <|>
                  pursue "Going towards monster at " findMonsterKill <|>
+                 restIfLowHP <|>
                  pickUpSupplies <|>
                  pursue "Going towards an explorable at " findExplorablePath <|>
                  findClosedDoors <|>
@@ -52,6 +53,14 @@ decisionMaker = forever $ do
                  findDownstairs <|>
                  searchAround <|>
                  logError "nothing to do")
+
+restIfLowHP :: (Alternative m, MonadWAI m) => m ()
+restIfLowHP = do
+  ws <- askWorldState
+  -- Don't move if hp is less than 2/3 of maxHP
+  if ws^.hp <= ((ws^.maxHP `div` 3) * 2)
+    then send "s"
+    else empty
 
 dywypi :: (Alternative m, MonadWAI m) => m ()
 dywypi = do
