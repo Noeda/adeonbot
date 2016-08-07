@@ -23,6 +23,15 @@ Here's an example file contents I use on my local setup:
     latency: 1000000000                        # nanoseconds to wait until terminal gets idle
     nethackCommand: ["./nh360/games/nethack"]
 
+Environment variables
+---------------------
+
+`TERM` environment variable should be `xterm`. Connecting to servers like
+`nethack.alt.org` will use this environment variable and bot can get confused
+if it's not what it expects.
+
+    export TERM=xterm
+
 .nethackrc
 ----------
 
@@ -41,10 +50,15 @@ Here's an example file contents I use on my local setup:
     OPTIONS=!timed_delay
     OPTIONS=number_pad:0
 
+    # If supported, this will let the bot know when it's okay to write more
+    # commands to NetHack.
+
+    # NetHack 3.6.0 does not support vt_tiledata
+    # OPTIONS=vt_tiledata
+
     SYMBOLS=S_vcdoor:7
     SYMBOLS=S_hcdoor:7
     SYMBOLS=S_grave:7
     SYMBOLS=S_rock:8
     SYMBOLS=S_ghost:X
-
 
