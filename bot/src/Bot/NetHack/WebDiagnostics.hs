@@ -56,7 +56,19 @@ worldChangeDetector world_state_get world_state_chan = do
 app :: TChan (WorldState, BL.ByteString) -> Application
 app world_state_chan req respond = case pathInfo req of
   ["api", "v1", "websocket", "botfeed"] -> botFeed world_state_chan req respond
+  [] -> serveIndex req respond
+  [""] -> serveIndex req respond
+  ["index.html"] -> serveIndex req respond
+  ["bundle.js"] -> serveBundle req respond
   _ -> respond $ responseLBS status404 [] "Not found."
+
+serveIndex :: Application
+serveIndex _req respond = respond $ responseLBS status200 [] "<!DOCTYPE html><head><meta charset=\"utf-8\"></head><div id=\"content\"></div><body><script src=\"bundle.js\"></script><noscript>The web diagnostics tool requires that you have JavaScript turned in your browser.</noscript></body></html>"
+
+serveBundle :: Application
+serveBundle _req respond = do
+  bundle <- BL.readFile "diagnostics/bundle.js"
+  respond $ responseLBS status200 [] bundle
 
 botFeed :: TChan (WorldState, BL.ByteString) -> Application
 botFeed world_state_chan = websocketsOr defaultConnectionOptions (botFeedWS world_state_chan) $ \_ respond ->
