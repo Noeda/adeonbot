@@ -309,5 +309,5 @@ hasFoodInInventory :: WorldState -> Bool
 hasFoodInInventory wstate = any isFood (wstate^.inventory)
 
 hasSoreLegs :: WorldState -> Bool
-hasSoreLegs wstate = wstate^.soreLegsUntil <= wstate^.turn
+hasSoreLegs wstate = wstate^.soreLegsUntil >= wstate^.turn
 
