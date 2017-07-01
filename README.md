@@ -22,6 +22,8 @@ Here's an example file contents I use on my local setup:
     password: supersecret_password             # for public servers
     latency: 1000000000                        # nanoseconds to wait until terminal gets idle
     nethackCommand: ["./nh360/games/nethack"]
+    webDiagnosticsPort: 8080
+    webDiagnosticsHost: 127.0.0.1              # for web diagnostics thingmaling
 
 Environment variables
 ---------------------
