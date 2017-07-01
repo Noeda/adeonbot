@@ -5,10 +5,12 @@
 
 module Bot.NetHack.AIEntry
   ( AIState()
+  , WorldState()
   , doesAILookLikeItsOscillating
   , botConfig
   , emptyAIState
-  , stepAIState )
+  , stepAIState
+  , getAIStateWorldState )
   where
 
 import Bot.NetHack.Config
@@ -32,8 +34,12 @@ import Terminal.Screen
 data AIState = AIState
   { _botConfig :: !BotConfig
   , _nextAction :: !(AI ())
-  , _turnCountLastChanged :: !(Turn, UTCTime) }
+  , _turnCountLastChanged :: !(Turn, UTCTime)
+  , _worldState :: !(Maybe WorldState) }
 makeLenses ''AIState
+
+getAIStateWorldState :: AIState -> Maybe WorldState
+getAIStateWorldState aistate = aistate^.worldState
 
 doesAILookLikeItsOscillating :: MonadIO m => AIState -> m Bool
 doesAILookLikeItsOscillating ai = liftIO $ do
@@ -46,7 +52,8 @@ emptyAIState bc = liftIO $ do
   return $ AIState
           { _botConfig = bc
           , _nextAction = bot bc
-          , _turnCountLastChanged = (1, now) }
+          , _turnCountLastChanged = (1, now)
+          , _worldState = Nothing }
 
 stepAIState :: UTCTime -> ScreenState -> Int -> Int -> AIState -> (AIState, B.ByteString)
 stepAIState now screenstate x y aistate =
@@ -55,10 +62,11 @@ stepAIState now screenstate x y aistate =
 runAI :: UTCTime -> ScreenState -> Int -> Int -> AIState -> (FreeT AIF Identity ()) -> (AIState, B.ByteString)
 runAI now screenstate w h aistate' (FreeT (Identity ai)) = case ai of
   Pure () -> (aistate, B.empty)
-  Free (ReportWorldState ws next) ->
+  Free (ReportWorldState ws next) -> do
+    let aistate' = aistate & worldState .~ Just ws
     if ws^.turn > aistate^.turnCountLastChanged._1
-      then runAI now screenstate w h (aistate & turnCountLastChanged .~ (ws^.turn, now)) next
-      else runAI now screenstate w h aistate next
+      then runAI now screenstate w h (aistate' & turnCountLastChanged .~ (ws^.turn, now)) next
+      else runAI now screenstate w h aistate' next
   Free (Yield next) -> runAI now screenstate w h aistate next
   Free (GetCurrentScreenState fun) -> runAI now screenstate w h aistate (fun screenstate w h)
   Free (Send bs next) -> (aistate & nextAction .~ (toFT next), bs)

@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Bot.NetHack
   ( runAdeonbot )
@@ -10,6 +11,7 @@ import Bot.NetHack.AIEntry
 import Bot.NetHack.Config
 import Bot.NetHack.Logs
 import Bot.NetHack.Synchronizer
+import Bot.NetHack.WebDiagnostics
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
@@ -65,8 +67,8 @@ showUsage handle = do
   hPutStrLn handle "Usage:"
   hPutStrLn handle "adeonbot [CONFIG FILE]"
 
-botEntry :: BotConfig -> TVar (ActivityReport, Maybe B.ByteString) -> IO ()
-botEntry config activity_report_tvar = do
+botEntry :: BotConfig -> TVar (ActivityReport, Maybe B.ByteString) -> (WorldState -> STM ()) -> IO ()
+botEntry config activity_report_tvar update_world = do
   let bot_code = makeBotLogicRunner bot_runner
       sender = makeSender send
 
@@ -91,6 +93,12 @@ botEntry config activity_report_tvar = do
     if oscillates
       then sendBailoutString send >> throwIO BotOscillated
       else do let (new_aistate, sending) = stepAIState now screen_state cx cy state
+
+              -- Update the world state so diagnostics can pick it up
+              case getAIStateWorldState new_aistate of
+                Nothing -> return ()
+                Just world -> atomically $ update_world world
+
               when (B.null sending) $
                 logError "botEntry: AI decided not to send anything to NetHack. Panic."
               return (new_aistate, sending)
@@ -125,70 +133,81 @@ run config = withRawTerminalMode $ do
     -- Give some time for command to warm up (like connecting to NAO)
     threadDelay 2000000
 
-    activity_report_tvar <- newTVarIO (ActivityReport { lastActivityObserved = 0
-                                                      , endOfDataObserved = False
-                                                      , pendingDataSend = False
-                                                      , screenState = emptyScreenState 80 24
-                                                      , processingInput = False
-                                                      , cursorX = 0
-						      , cursorY = 0 }, Nothing)
+    world_state_tvar <- newTVarIO Nothing
 
-    let write_outputter = forever $ do
-                            -- We do two transactions to make sure `now` is up to date when we want to update lastActivityObserved variable
-                            atomically $ do
-		              (_ar, sending) <- readTVar activity_report_tvar
-		   	      case sending of
-				Nothing -> retry
-				Just _ -> return ()
-                            now <- toNanoSecs <$> getTime Monotonic
-			    atomically $ do
-		              (ar, sending) <- readTVar activity_report_tvar
-			      case sending of
-			        Nothing -> return ()
-				Just bs -> do
-				  write_output bs
-				  writeTVar activity_report_tvar (ar { lastActivityObserved = now, pendingDataSend = False, endOfDataObserved = False }, Nothing)
+    let world_state_stm = readTVar world_state_tvar >>= \case
+                            Nothing -> retry
+                            Just world_state -> return world_state
 
-    withAsync write_outputter $ \write_async -> do
-      liftIO $ link write_async
-      withAsync (botEntry config activity_report_tvar >> killThread tid) $ \bot_async -> do
-        liftIO $ link bot_async
+        report_world ws = writeTVar world_state_tvar $ Just ws
+
+    withAsync (runWebDiagnostics world_state_stm config) $ \web_diagnostics -> do
+      link web_diagnostics
+
+      activity_report_tvar <- newTVarIO (ActivityReport { lastActivityObserved = 0
+                                                        , endOfDataObserved = False
+                                                        , pendingDataSend = False
+                                                        , screenState = emptyScreenState 80 24
+                                                        , processingInput = False
+                                                        , cursorX = 0
+                                                        , cursorY = 0 }, Nothing)
+
+      let write_outputter = forever $ do
+                              -- We do two transactions to make sure `now` is up to date when we want to update lastActivityObserved variable
+                              atomically $ do
+                                (_ar, sending) <- readTVar activity_report_tvar
+                                case sending of
+                                  Nothing -> retry
+                                  Just _ -> return ()
+                              now <- toNanoSecs <$> getTime Monotonic
+                              atomically $ do
+                                (ar, sending) <- readTVar activity_report_tvar
+                                case sending of
+                                  Nothing -> return ()
+                                  Just bs -> do
+                                    write_output bs
+                                    writeTVar activity_report_tvar (ar { lastActivityObserved = now, pendingDataSend = False, endOfDataObserved = False }, Nothing)
   
-        withAsync (forever $ do
-                    bs <- B.hGetSome stdin 1024
-                    atomically $ write_output bs) $ \_ -> flip evalStateT (emptyScreenState 80 24, emulator, 0, 0) $ forever $ do
+      withAsync write_outputter $ \write_async -> do
+        liftIO $ link write_async
+        withAsync (botEntry config activity_report_tvar report_world >> killThread tid) $ \bot_async -> do
+          liftIO $ link bot_async
   
-          bs <- liftIO $ atomically read_input
-          -- Update lastActivityObserved ASAP
-          now <- liftIO $ toNanoSecs <$> getTime Monotonic
-          liftIO $ atomically $ modifyTVar activity_report_tvar $ \(ar, sending) -> (ar { lastActivityObserved = now, processingInput = True }, sending)
-
-          (st, emu, cx, cy) <- get
+          withAsync (forever $ do
+                      bs <- B.hGetSome stdin 1024
+                      atomically $ write_output bs) $ \_ -> flip evalStateT (emptyScreenState 80 24, emulator, 0, 0) $ forever $ do
   
-          let ((new_st, new_emu, new_cx, new_cy), stm) = runST $ do
-                                    thawed <- thawScreen st
-                                    exhaust thawed st bs emu cx cy activity_report_tvar
-
-	  -- Force evaluation of all things (we have to be able to trust the
-	  -- `now` and `processingInput` assignments below to reflect that
-	  -- input actually was processed)
-          void $ liftIO $ evaluate $ force $ new_st `deepseq` new_cx `deepseq` new_cy `deepseq` ()
-
-          liftIO $ do
-            now <- toNanoSecs <$> getTime Monotonic
-            atomically $ do
-              modifyTVar activity_report_tvar $ \(ar, sending) ->
-                (ar { lastActivityObserved = now
-                    , screenState = new_st
-                    , cursorX = new_cx
-                    , cursorY = new_cy
-                    , processingInput = False }, sending)
-              stm
+            bs <- liftIO $ atomically read_input
+            -- Update lastActivityObserved ASAP
+            now <- liftIO $ toNanoSecs <$> getTime Monotonic
+            liftIO $ atomically $ modifyTVar activity_report_tvar $ \(ar, sending) -> (ar { lastActivityObserved = now, processingInput = True }, sending)
   
-          put (new_st, new_emu, new_cx, new_cy)
-          liftIO $ do
-            BL.putStr (toANSIOutput Nothing new_st)
-            hFlush stdout
+            (st, emu, cx, cy) <- get
+  
+            let ((new_st, new_emu, new_cx, new_cy), stm) = runST $ do
+                                      thawed <- thawScreen st
+                                      exhaust thawed st bs emu cx cy activity_report_tvar
+  
+  	  -- Force evaluation of all things (we have to be able to trust the
+  	  -- `now` and `processingInput` assignments below to reflect that
+  	  -- input actually was processed)
+            void $ liftIO $ evaluate $ force $ new_st `deepseq` new_cx `deepseq` new_cy `deepseq` ()
+  
+            liftIO $ do
+              now <- toNanoSecs <$> getTime Monotonic
+              atomically $ do
+                modifyTVar activity_report_tvar $ \(ar, sending) ->
+                  (ar { lastActivityObserved = now
+                      , screenState = new_st
+                      , cursorX = new_cx
+                      , cursorY = new_cy
+                      , processingInput = False }, sending)
+                stm
+    
+            put (new_st, new_emu, new_cx, new_cy)
+            liftIO $ do
+              BL.putStr (toANSIOutput Nothing new_st)
+              hFlush stdout
  where
   exhaust :: ScreenStateMut s
           -> ScreenState

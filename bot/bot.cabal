@@ -25,7 +25,9 @@ library
                        Bot.NetHack.ScreenPattern
                        Bot.NetHack.Synchronizer
                        Bot.NetHack.WorldState
-  build-depends:       array
+                       Bot.NetHack.WebDiagnostics
+  build-depends:       aeson
+                      ,array
                       ,async
                       ,base >=4.7 && <5.0
                       ,bytestring
@@ -33,6 +35,7 @@ library
                       ,containers
                       ,deepseq
                       ,free
+                      ,http-types
                       ,lens
                       ,mtl
                       ,process
@@ -43,7 +46,10 @@ library
                       ,time
                       ,transformers
                       ,yaml
+                      ,wai
+                      ,wai-websockets
                       ,warp
+                      ,websockets
   hs-source-dirs:      src
   ghc-options:         -Wall -fno-warn-name-shadowing
   default-language:    Haskell2010

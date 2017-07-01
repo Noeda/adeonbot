@@ -1,5 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ViewPatterns #-}
 
@@ -64,7 +66,8 @@ module Bot.NetHack.WorldState
   , itemIdentity )
   where
 
-import Control.Lens hiding ( Level, levels )
+import Control.Lens hiding ( Level, levels, (.=) )
+import Data.Aeson
 import qualified Data.Array.IArray as A
 import Data.Data
 import qualified Data.IntMap.Strict as IM
@@ -95,12 +98,12 @@ data WorldState = WorldState
   , _hp             :: !Hitpoints
   , _maxHP          :: !Hitpoints
   , _turn           :: !Turn }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data LevelMeta = LevelMeta
   { _levelDescription :: !T.Text
   , _branchName       :: !T.Text }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data Level = Level
   { _cells    :: !(A.Array (Int, Int) LevelCell)
@@ -110,12 +113,36 @@ data Level = Level
   , _monsters :: !(M.Map (Int, Int) MonsterImage) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
+instance ToJSON Level where
+  toJSON lvl = object
+    [ "cells" .= (A.bounds (_cells lvl), A.assocs (_cells lvl))
+    , "whereSearchedLastTime" .= (_whereSearchedLastTime lvl)
+    , "statues" .= (_statues lvl)
+    , "boulders" .= (_boulders lvl)
+    , "monsters" .= (_monsters lvl) ]
+
+instance FromJSON Level where
+  parseJSON (Object ob) = do
+    (bounds, cells) <- ob .: "cells"
+    searched_last_time <- ob .: "whereSearchedLastTime"
+    statues <- ob .: "statues"
+    boulders <- ob .: "boulders"
+    monsters <- ob .: "monsters"
+    return Level
+      { _cells = A.array bounds cells
+      , _whereSearchedLastTime = searched_last_time
+      , _statues = statues
+      , _boulders = boulders
+      , _monsters = monsters }
+
+  parseJSON _ = fail "FromJSON.Level: not an object"
+
 data LevelCell = LevelCell
   { _cellFeature :: !(Maybe LevelFeature)
   , _numberOfTimesSearched :: !Int
   , _cellItemAppearanceLastTime :: String
   , _cellItems :: !ItemPileImage }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data LevelFeature
   = Wall                   -- Any wall like thing, can be black rock or | or -
@@ -131,7 +158,7 @@ data LevelFeature
   | Lava
   | Water
   | InkyBlackness
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 -- | Can I walk on it?
 isPassable :: LevelFeature -> Bool
@@ -156,26 +183,26 @@ data Monster
   | UnremarkableMonster    -- Moves towards you and hits you. Most monsters are of this type.
   | FloatingEyeMonster     -- If you hit it directly, you get frozen.
   | MindFlayerMonster      -- Evil stuff.
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 data BUC
   = Uncursed
   | Blessed
   | Cursed
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 data Status
   = Confstunned            -- Confused or stunned. Right now we treat them the same.
   | Blind                  -- Blind. Can't infer things about surroundings the same way.
   | FoodPoisoning          -- Oh my, what did you eat??? BAD BOT
   | Hungry                 -- Hungry, Weak and Fainting all in one
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 data ItemPileImage
   = NoPile         -- We don't see any item pile here
   | PileSeen       -- We see a pile of items but don't know what they are
   | Pile ItemPile  -- We see a pile and know these items are on the pile
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 type ItemPile = [Item]
 
@@ -185,7 +212,7 @@ data Item = Item
   , _corrosion :: !CorrosionLevel
   , _quantity :: !Int
   , _buc :: !(Maybe BUC) }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data ArmorSlot
   = Helmet
@@ -195,13 +222,13 @@ data ArmorSlot
   | TShirt
   | Shield
   | Cloak
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 data ArmorSpecial
   = MagicResistance
   | Reflection
   | NoSpecials
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 armor :: Int -> ArmorSlot -> ItemIdentity
 armor ac slot = Armor ac slot NoSpecials
@@ -218,7 +245,7 @@ data ItemIdentity
   | ScaryTonalInstrument  -- tooled horn
   | Statue
   | StrangeItem    -- No idea what this item is.
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 unlocksDoors :: ItemIdentity -> Bool
 unlocksDoors Key = True
@@ -229,7 +256,7 @@ data MonsterImage = MonsterImage
   { _monster :: !Monster
   , _isPeaceful :: !(Maybe Bool)
   , _monsterAppearance :: String }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 makeLenses ''MonsterImage
 makeLenses ''Level
 makeLenses ''LevelCell
