@@ -1,7 +1,7 @@
 Adeonbot
 --------
 
-NetHack playing bot.
+NetHack playing bot. This bot can only play vanilla NetHack 3.6.0 and up.
 
 Build instructions
 ------------------
