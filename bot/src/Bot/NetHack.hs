@@ -9,9 +9,11 @@ module Bot.NetHack
 import Bot.NetHack.AIEntry
 import Bot.NetHack.Config
 import Bot.NetHack.Logs
+import Bot.NetHack.Synchronizer
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
+import Control.DeepSeq
 import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Class
@@ -20,6 +22,7 @@ import Control.Monad.ST
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Data
+import Data.Maybe
 import Data.Monoid
 import qualified Data.Text as T
 import Data.Time
@@ -62,49 +65,35 @@ showUsage handle = do
   hPutStrLn handle "Usage:"
   hPutStrLn handle "adeonbot [CONFIG FILE]"
 
-botEntry :: BotConfig -> EndOfDataVar -> STM (ScreenState, Int, Int, Integer) -> IO () -> (B.ByteString -> STM ()) -> IO ()
-botEntry config end_of_data_tvar getNextStatus refresh send = do
-  aistate <- emptyAIState config
-  aiLoop aistate
+botEntry :: BotConfig -> TVar (ActivityReport, Maybe B.ByteString) -> IO ()
+botEntry config activity_report_tvar = do
+  let bot_code = makeBotLogicRunner bot_runner
+      sender = makeSender send
+
+      activity_syncer = makeActivitySyncer $ fmap fst $ atomically $ readTVar activity_report_tvar
+
+  initial_ai_state <- emptyAIState config
+
+  runSynchronizer bot_code sender activity_syncer (fromIntegral $ latency config) initial_ai_state
  where
-  aiLoop aistate = do
-    status <- waitUntilCooldown
-    new_aistate <- botLogic status aistate
-    refresh
-    aiLoop new_aistate
+  send bs =
+    atomically $ do
+      (old_ar, sending) <- readTVar activity_report_tvar
+      -- Wait if the previous data hasn't been consumed yet from send buffer
+      when (isJust sending) retry
 
-  waitUntilCooldown = do
-    now <- toNanoSecs <$> getTime Monotonic
-    let accepted_time = now - fromIntegral (latency config)
-        accepted_time_with_endofdata = now - fromIntegral 40000000
-
-    maybestatus <- atomically $ do
-      st@(_, _, _, timing) <- getNextStatus
-      end_of_data_received <- isMarked end_of_data_tvar
-      let at = if end_of_data_received then accepted_time_with_endofdata
-                                         else accepted_time
-      if timing > at
-        then return Nothing
-        else acquireEndOfData end_of_data_tvar >> return (Just st)
-
-    case maybestatus of
-      Nothing -> do
-        threadDelay 10000 -- 10ms
-        waitUntilCooldown
-      Just status -> return status
-
-  botLogic (screenstate, cx, cy, _) aistate = do
+      writeTVar activity_report_tvar $ (old_ar { pendingDataSend = True }, Just bs)
+    
+  bot_runner state screen_state cx cy = do
     -- Oscillation check; has turn count changed in last N seconds?
     now <- getCurrentTime
-    oscillates <- doesAILookLikeItsOscillating aistate
+    oscillates <- doesAILookLikeItsOscillating state
     if oscillates
-      then sendBailoutString (atomically . send) >> throwIO BotOscillated
-      else do let (new_aistate, sending) = stepAIState now screenstate cx cy aistate
-              if B.null sending
-                then logError "botEntry: AI decided not to send anything to NetHack. Panic."
-                else logTrace ("Sent " <> show sending) $
-                        atomically $ send sending
-              return new_aistate
+      then sendBailoutString send >> throwIO BotOscillated
+      else do let (new_aistate, sending) = stepAIState now screen_state cx cy state
+              when (B.null sending) $
+                logError "botEntry: AI decided not to send anything to NetHack. Panic."
+              return (new_aistate, sending)
 
 sendBailoutString :: (B.ByteString -> IO ()) -> IO ()
 sendBailoutString send = do
@@ -126,37 +115,9 @@ sendBailoutString send = do
   threadDelay 500000
   send "            \x1b"
 
-newtype EndOfDataVar = EndOfDataVar (TVar (Bool, Bool))
-
-markEndOfData :: EndOfDataVar -> STM ()
-markEndOfData (EndOfDataVar tvar) = modifyTVar tvar $ \(marked, busy) ->
-  if busy
-    then (marked, True)
-    else (True, False)
-
-isMarked :: EndOfDataVar -> STM Bool
-isMarked (EndOfDataVar tvar) = do
-  (marked, _) <- readTVar tvar
-  return marked
-
-acquireEndOfData :: EndOfDataVar -> STM ()
-acquireEndOfData (EndOfDataVar tvar) = writeTVar tvar (False, True)
-
-releaseEndOfData :: EndOfDataVar -> STM ()
-releaseEndOfData (EndOfDataVar tvar) = writeTVar tvar (False, False)
-
 run :: BotConfig -> IO ()
 run config = withRawTerminalMode $ do
   let cmd = fmap T.unpack $ nethackCommand config
-
-  end_of_data_tvar <- EndOfDataVar <$> newTVarIO (False, False)
-
-  now <- toNanoSecs <$> getTime Monotonic
-  status_tvar <- newTVarIO (emptyScreenState 80 24, 0, 0, now)
-
-  let get_next_status = readTVar status_tvar
-      refresh = do now <- toNanoSecs <$> getTime Monotonic
-                   atomically $ modifyTVar status_tvar $ \(x, y, z, _) -> (x, y, z, now)
 
   tid <- myThreadId
 
@@ -164,32 +125,70 @@ run config = withRawTerminalMode $ do
     -- Give some time for command to warm up (like connecting to NAO)
     threadDelay 2000000
 
-    let write_output_s bs = do releaseEndOfData end_of_data_tvar
-                               write_output bs
+    activity_report_tvar <- newTVarIO (ActivityReport { lastActivityObserved = 0
+                                                      , endOfDataObserved = False
+                                                      , pendingDataSend = False
+                                                      , screenState = emptyScreenState 80 24
+                                                      , processingInput = False
+                                                      , cursorX = 0
+						      , cursorY = 0 }, Nothing)
 
-    withAsync (botEntry config end_of_data_tvar get_next_status refresh write_output_s >> killThread tid) $ \bot_async -> do
-      liftIO $ link bot_async
+    let write_outputter = forever $ do
+                            -- We do two transactions to make sure `now` is up to date when we want to update lastActivityObserved variable
+                            atomically $ do
+		              (_ar, sending) <- readTVar activity_report_tvar
+		   	      case sending of
+				Nothing -> retry
+				Just _ -> return ()
+                            now <- toNanoSecs <$> getTime Monotonic
+			    atomically $ do
+		              (ar, sending) <- readTVar activity_report_tvar
+			      case sending of
+			        Nothing -> return ()
+				Just bs -> do
+				  write_output bs
+				  writeTVar activity_report_tvar (ar { lastActivityObserved = now, pendingDataSend = False, endOfDataObserved = False }, Nothing)
 
-      withAsync (forever $ do
-                  bs <- B.hGetSome stdin 1024
-                  atomically $ write_output bs) $ \_ -> flip evalStateT (emptyScreenState 80 24, emulator, 0, 0) $ forever $ do
+    withAsync write_outputter $ \write_async -> do
+      liftIO $ link write_async
+      withAsync (botEntry config activity_report_tvar >> killThread tid) $ \bot_async -> do
+        liftIO $ link bot_async
+  
+        withAsync (forever $ do
+                    bs <- B.hGetSome stdin 1024
+                    atomically $ write_output bs) $ \_ -> flip evalStateT (emptyScreenState 80 24, emulator, 0, 0) $ forever $ do
+  
+          bs <- liftIO $ atomically read_input
+          -- Update lastActivityObserved ASAP
+          now <- liftIO $ toNanoSecs <$> getTime Monotonic
+          liftIO $ atomically $ modifyTVar activity_report_tvar $ \(ar, sending) -> (ar { lastActivityObserved = now, processingInput = True }, sending)
 
-        bs <- liftIO $ atomically read_input
-        (st, emu, cx, cy) <- get
+          (st, emu, cx, cy) <- get
+  
+          let ((new_st, new_emu, new_cx, new_cy), stm) = runST $ do
+                                    thawed <- thawScreen st
+                                    exhaust thawed st bs emu cx cy activity_report_tvar
 
-        let ((new_st, new_emu, new_cx, new_cy), stm) = runST $ do
-                                  thawed <- thawScreen st
-                                  exhaust thawed st bs emu cx cy end_of_data_tvar
-        liftIO $ do
-          now <- toNanoSecs <$> getTime Monotonic
-          atomically $ do
-            writeTVar status_tvar (new_st, new_cx, new_cy, now)
-            stm
+	  -- Force evaluation of all things (we have to be able to trust the
+	  -- `now` and `processingInput` assignments below to reflect that
+	  -- input actually was processed)
+          void $ liftIO $ evaluate $ force $ new_st `deepseq` new_cx `deepseq` new_cy `deepseq` ()
 
-        put (new_st, new_emu, new_cx, new_cy)
-        liftIO $ do
-          BL.putStr (toANSIOutput Nothing new_st)
-          hFlush stdout
+          liftIO $ do
+            now <- toNanoSecs <$> getTime Monotonic
+            atomically $ do
+              modifyTVar activity_report_tvar $ \(ar, sending) ->
+                (ar { lastActivityObserved = now
+                    , screenState = new_st
+                    , cursorX = new_cx
+                    , cursorY = new_cy
+                    , processingInput = False }, sending)
+              stm
+  
+          put (new_st, new_emu, new_cx, new_cy)
+          liftIO $ do
+            BL.putStr (toANSIOutput Nothing new_st)
+            hFlush stdout
  where
   exhaust :: ScreenStateMut s
           -> ScreenState
@@ -197,34 +196,36 @@ run config = withRawTerminalMode $ do
           -> Emulator ()
           -> Int
           -> Int
-          -> EndOfDataVar
+	  -> TVar (ActivityReport, Maybe B.ByteString)
           -> ST s ((ScreenState, Emulator (), Int, Int), STM ())
-  exhaust thawed st bs emu cx cy end_of_data_tvar = do
+  exhaust thawed st bs emu cx cy activity_report_tvar = do
     case emu of
       Pure () -> logError "impossible!"
 
       Free (UpdateCursorPosition x y next) ->
-        exhaust thawed st bs next x y end_of_data_tvar
+        exhaust thawed st bs next x y activity_report_tvar
 
       Free (YieldEndOfData next) -> do
-        (r, io) <- exhaust thawed st bs next cx cy end_of_data_tvar
-        return (r, io >> markEndOfData end_of_data_tvar)
+        (r, io) <- exhaust thawed st bs next cx cy activity_report_tvar
+        return (r, do io
+		      (ar, st) <- readTVar activity_report_tvar
+		      writeTVar activity_report_tvar (ar { endOfDataObserved = True }, st))
 
       Free (ReadByte fun) ->
         if B.null bs
           then do new_st <- freezeScreen thawed
                   return ((new_st, emu, cx, cy), return ())
-          else exhaust thawed st (B.tail bs) (fun $ B.head bs) cx cy end_of_data_tvar
+          else exhaust thawed st (B.tail bs) (fun $ B.head bs) cx cy activity_report_tvar
 
       Free (PeekByte fun) -> do
         if B.null bs
           then do new_st <- freezeScreen thawed
                   return ((new_st, emu, cx, cy), return ())
-          else exhaust thawed st bs (fun $ B.head bs) cx cy end_of_data_tvar
+          else exhaust thawed st bs (fun $ B.head bs) cx cy activity_report_tvar
 
       Free (YieldChange mut next) -> do
-        mut thawed >> exhaust thawed st bs next cx cy end_of_data_tvar
+        mut thawed >> exhaust thawed st bs next cx cy activity_report_tvar
 
       Free (GetCurrentState fun)  -> do
-        exhaust thawed st bs (fun st) cx cy end_of_data_tvar
+        exhaust thawed st bs (fun st) cx cy activity_report_tvar
 

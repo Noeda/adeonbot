@@ -70,8 +70,11 @@ serverLogin :: MonadAI m => BotConfig -> m Bool
 serverLogin bc = matchfirst $
   [ ("l) Login", send "l")
   , ("Please enter your username", send ( (T.encodeUtf8 $ playername bc) <> "\n" ))
+  , ("2) Go to NetHack 3.4.3 menu", send "2")
+  , ("p) Play NetHack 3.4.3", send "p")
   , ("3) Go to NetHack 3.6.1-dev menu", send "3")   -- NAO
-  , ("p) Play NetHack 3.6.1-DEV", send "p") ] ++ password_item
+  , ("p) Play NetHack 3.6.1-DEV", send "p")
+  , ("n) Play NetHack 3.6.0", send "n") ] ++ password_item
  where
   password_item = case password bc of
     Nothing -> [ ("Please enter your password", logError "serverLogin: password asked but not set in yaml config.") ]
@@ -81,7 +84,9 @@ characterCreation :: MonadAI m => m Bool
 characterCreation = matchfirst
   [ ("Shall I pick a character's", send "n")
   , ("Pick a role or profession", send "v")
+  , ("Pick a role for your character", send "v")
   , ("Pick a race or species", send "d")
+  , ("Pick the race of your Valkyrie", send "d")
   , ("Pick an alignment", send "l")
   , ("Is this ok?", send "y")
   , ("It is written in the Book of", send " ") ]

@@ -23,6 +23,7 @@ library
                        Bot.NetHack.MonadAI
                        Bot.NetHack.SelectItem
                        Bot.NetHack.ScreenPattern
+                       Bot.NetHack.Synchronizer
                        Bot.NetHack.WorldState
   build-depends:       array
                       ,async
@@ -30,6 +31,7 @@ library
                       ,bytestring
                       ,clock
                       ,containers
+                      ,deepseq
                       ,free
                       ,lens
                       ,mtl
@@ -49,7 +51,7 @@ executable adeonbot
   main-is:             Main.hs
   build-depends:       base
                       ,bot
-  ghc-options:         -Wall -fno-warn-name-shadowing -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
+  ghc-options:         -Wall -fno-warn-name-shadowing -threaded -rtsopts "-with-rtsopts=-N2 -A512m -n8m -I0" -O2
   hs-source-dirs:      exe
   default-language:    Haskell2010
 

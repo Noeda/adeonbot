@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE BangPatterns #-}
@@ -17,7 +18,9 @@ module Terminal.Emulator
   where
 
 import qualified Data.ByteString as B
+import Control.DeepSeq
 import Control.Monad.Free
+import Control.Monad.Free.Church
 import Control.Monad.State.Strict
 import Data.Data
 import Data.Foldable
@@ -57,6 +60,14 @@ instance MonadEmulator (Free EmulatorF) where
   yield fun = liftF $ YieldChange fun ()
   getScreenState = liftF $ GetCurrentState id
 
+instance MonadEmulator (F EmulatorF) where
+  updateCursorPosition x y = liftF $ UpdateCursorPosition x y ()
+  readByte = liftF $ ReadByte id
+  peekByte = liftF $ PeekByte id
+  yieldEndOfData = liftF $ YieldEndOfData ()
+  yield fun = liftF $ YieldChange fun ()
+  getScreenState = liftF $ GetCurrentState id
+
 instance MonadEmulator m => MonadEmulator (StateT s m) where
   updateCursorPosition x y = lift $ updateCursorPosition x y
   readByte = lift readByte
@@ -72,7 +83,7 @@ data EmulatorState = EmulatorState
   , showCursor :: !Bool
   , bold :: !Bool
   , inverse :: !Bool }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, NFData )
 
 getActualColor :: EmulatorState -> (ScreenColor, ScreenColor)
 getActualColor es | bold es == True =
@@ -347,7 +358,10 @@ handleEscapeSequence numbers "m" = for_ numbers $ \case
 handleEscapeSequence _ _ = return ()
 
 emulator :: Emulator ()
-emulator = flip evalStateT initialEmulatorState $ forever $ do
+emulator = fromF emulator'
+
+emulator' :: F EmulatorF ()
+emulator' = flip evalStateT initialEmulatorState $ forever $ do
   -- Flip cursor pos
   st <- get
 

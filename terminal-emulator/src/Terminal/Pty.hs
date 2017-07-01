@@ -92,6 +92,7 @@ withProcessInPty exe args action = mask $ \restore -> do
     let inputLoop = forever $ do
                       i <- atomically $ takeTMVar inbox
                       B.hPutStr masterhd i
+                      hFlush masterhd
 
         outputLoop = forever $ do
                        bs <- B.hGetSome masterhd 4096

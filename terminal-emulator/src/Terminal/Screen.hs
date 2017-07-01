@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 
 module Terminal.Screen
@@ -26,6 +27,7 @@ module Terminal.Screen
   , toANSIOutput )
   where
 
+import Control.DeepSeq
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Trans.Class
@@ -75,7 +77,7 @@ data ScreenColor
   | Magenta | Cyan | Yellow | DarkGray
   | LightGray | BrightRed | BrightGreen | BrightBlue
   | BrightMagenta | BrightCyan | BrightYellow | White
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, NFData )
 
 instance Hashable ScreenColor
 
@@ -94,13 +96,13 @@ data Cell = Cell
   { foregroundColor :: !ScreenColor
   , backgroundColor :: !ScreenColor
   , contents        :: !T.Text }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, NFData )
 
 instance Hashable Cell
 
 newtype ScreenState = ScreenState
   { rawCells :: A.Array (Int, Int) Cell }
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, NFData )
 
 newtype ScreenStateMut s = ScreenStateMut
   { rawCellsMut :: MA.STArray s (Int, Int) Cell }
