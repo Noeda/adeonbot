@@ -8,6 +8,7 @@ module Bot.NetHack.WorldState
   , Turn
   , Hitpoints
   , LevelIndex
+  , hasFoodInInventory
   , hasSoreLegs
   , soreLegsUntil
   , hp
@@ -276,6 +277,9 @@ hasStatue lvl pos = fromMaybe False (do
 isFood :: Item -> Bool
 isFood (_itemIdentity -> Food) = True
 isFood _ = False
+
+hasFoodInInventory :: WorldState -> Bool
+hasFoodInInventory wstate = any isFood (wstate^.inventory)
 
 hasSoreLegs :: WorldState -> Bool
 hasSoreLegs wstate = wstate^.soreLegsUntil <= wstate^.turn

@@ -237,15 +237,11 @@ searchAround = do
 eatIfHungry :: (Alternative m, MonadWAI m) => m ()
 eatIfHungry = do
   wstate <- askWorldState
-  if Hungry `S.member` (wstate^.statuses)
+  if Hungry `S.member` (wstate^.statuses) && hasFoodInInventory wstate
     then tryEating
     else empty
  where
   tryEating = do
-    -- Dirty inventory before eating anything; sometimes there are mistakes in
-    -- inventory and they would be rectified
-    modWorld $ execState dirtyInventory
-
     sendRaw "e"
     line <- getScreenLine 0
     when (T.isInfixOf "; eat it?" line || T.isInfixOf "; eat one?" line) $
