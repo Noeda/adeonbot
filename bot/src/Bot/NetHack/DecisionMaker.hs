@@ -108,15 +108,17 @@ pickUpSupplies = do
     [] -> do
       sendRaw ","
       line <- getScreenLine 0
-      if T.isInfixOf "There is nothing here to pick up." line
-        then modWorld (execState (inferItemPileImage (cx, cy) NoPile)) >> empty
-        else do void $ selectManyItems (\item counter -> case item of
-                  item | isFood item && counter < 5 ->
-                    logTrace ("Picking up food item (" <> show counter <> " -> " <> show (counter+1) <> ")")
-                             (1, counter+1)
-                  _ -> (0, counter)) num_food_items
-                modWorld $ execState dirtyInventory
-                yield
+      if | T.isInfixOf "There is nothing here to pick up." line ||
+           T.isInfixOf "You could drink the water..." line
+           -> modWorld (execState (inferItemPileImage (cx, cy) NoPile)) >> empty
+         | otherwise
+           -> do void $ selectManyItems (\item counter -> case item of
+                   item | isFood item && counter < 5 ->
+                     logTrace ("Picking up food item (" <> show counter <> " -> " <> show (counter+1) <> ")")
+                              (1, counter+1)
+                   _ -> (0, counter)) num_food_items
+                 modWorld $ execState dirtyInventory
+                 yield
     (p:_rest) -> do
       d <- al' $ diffToDir (cx, cy) p
       send d
@@ -197,7 +199,7 @@ searchAround = do
           _ -> empty
 
   searchableFolder :: M.Map (Int, Int) Int -> Level -> (Int, Int) -> Maybe ((Int, Int), Int) -> (Int, Int) -> Maybe ((Int, Int), Int)
-  searchableFolder cell_scores lvl playerpos best_so_far pos@(px, py) =
+  searchableFolder cell_scores lvl _playerpos best_so_far pos@(px, py) =
     let cumulative_score = sum $ flip fmap [(x, y) | x <- [px-1..px+1], y <- [py-1..py+1]] $ \(x, y) ->
                              let base_score = fromMaybe 0 (M.lookup (x, y) cell_scores)
                               in if join (lvl^?cells.ix (x, y).cellFeature) == Just Wall
@@ -280,13 +282,6 @@ diffToDir (x1, y1) (x2, y2) =
      | x1 == x2-1 && y1 == y2+1 -> Just "u"
      | x1 == x2+1 && y1 == y2+1 -> Just "y"
      | otherwise -> Nothing
-
-al :: (Alternative m, MonadAI m) => m (Maybe a) -> m a
-al action = do
-  result <- action
-  case result of
-    Nothing -> empty
-    Just ok -> return ok
 
 al' :: (Alternative m, MonadAI m) => Maybe a -> m a
 al' = \case
