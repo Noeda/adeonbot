@@ -100,9 +100,12 @@ pickUpSupplies = do
 
   (_, cx, cy) <- currentScreen
 
+  is_passable <- getPassableFunction
+
   path <- al' $ levelSearch (cx, cy)
                             (\goal _ -> S.member goal food_item_piles)
                             lvl
+                            is_passable
 
   case path of
     [] -> do
@@ -123,8 +126,20 @@ pickUpSupplies = do
       d <- al' $ diffToDir (cx, cy) p
       send d
 
+getPassableFunction :: (Alternative m, MonadWAI m) => m (LevelFeature -> Bool)
+getPassableFunction = do
+  wstate <- askWorldState
+  lvl <- getCurrentLevel wstate
+  return $ if lvl^.numTurnsInSearchStrategy >= 500
+             then isPassableIncludeTraps
+             else isPassable
+
 searchAround :: (Alternative m, MonadWAI m) => m ()
 searchAround = do
+  wstate <- askWorldState
+  let curlvl = wstate^.currentLevel
+  modWorld $ (levels.at curlvl._Just.numTurnsInSearchStrategy) +~ 1
+
   -- Expand from players position outwards to find all reachable walls
   (_, cx, cy) <- currentScreen
 
@@ -147,7 +162,9 @@ searchAround = do
     wstate <- askWorldState
     lvl <- getCurrentLevel wstate
 
-    let reachable_squares = S.toList $ expand (cx, cy) (\pos -> getWalkableNeighbours lvl pos (const False))
+    is_passable <- getPassableFunction
+
+    let reachable_squares = S.toList $ expand (cx, cy) (\pos -> getWalkableNeighbours lvl pos (const False) is_passable)
   
     -- Which of those reachable squares is the best?
     --
@@ -155,7 +172,7 @@ searchAround = do
     --
     -- Scoring currently works so that square with highest score is explored.
     --
-    -- There are two heuristics, one is that we divide the level into 6 cells:
+    -- There are some heuristics, one is that we divide the level into 6 cells:
     -- (see coords_to_cell/bigCellScores)
     --
     --   +--------+--------+--------+
@@ -172,6 +189,16 @@ searchAround = do
     --
     --   The second heuristic lowers the score of any wall by the number of time
     --   it has been searched already.
+    --
+    --   Third heuristic:
+    --
+    --   If we see a corridor, with 5 sides as rock and one corridor behind it,
+    --   we make that corridor much more desirable search target.
+    --
+    --   .|
+    --   .+####
+    --   .|   ^
+    --      this spot here
     --
   
     let bigcell_scores = fmap (*10) $ bigCellScores lvl
@@ -192,6 +219,8 @@ searchAround = do
         path <- al' $ levelSearch (cx, cy)
                                   (\goal _ -> goal == ppos)
                                   lvl
+                                  is_passable
+
         case path of
           (p:_) -> case diffToDir (cx, cy) p of
             Nothing -> empty
@@ -213,7 +242,26 @@ searchAround = do
   cellScores lvl bigcell_scores = flip execState M.empty $ for_ levelSquares $ \pos -> do
     let search_penalty = (*200) $ fromMaybe 0 $ lvl^?cells.ix pos.numberOfTimesSearched
         bigcell_penalty = fromMaybe 0 $ IM.lookup (coords_to_cell pos) bigcell_scores
-    modify $ M.insert pos (negate search_penalty + bigcell_penalty)
+        corridor_boost = computeCorridorBoost lvl pos
+
+    modify $ M.insert pos (negate search_penalty + bigcell_penalty + corridor_boost)
+
+  computeCorridorBoost lvl pos@(x, y) = fromMaybe 0 $ do
+    Floor <- lvl^?cells.ix pos.cellFeature._Just
+    cell8 <- lvl^?cells.ix (x, y-1).cellFeature._Just
+    cell4 <- lvl^?cells.ix (x-1, y).cellFeature._Just
+    cell6 <- lvl^?cells.ix (x+1, y).cellFeature._Just
+    cell2 <- lvl^?cells.ix (x, y+1).cellFeature._Just
+
+    when (isPassable cell8 && isPassable cell2) empty
+    when (isPassable cell4 && isPassable cell6) empty
+
+    when (isPassable cell4 && isPassable cell8) empty
+    when (isPassable cell6 && isPassable cell8) empty
+    when (isPassable cell4 && isPassable cell2) empty
+    when (isPassable cell6 && isPassable cell2) empty
+
+    return 10
 
   bigCellScores lvl = flip execState IM.empty $ for_ levelSquares $ \pos -> do
     let cell_index = coords_to_cell pos
@@ -287,6 +335,13 @@ al' = \case
 findDownstairs :: (Alternative m, MonadWAI m)
                => m ()
 findDownstairs = do
+  is_passable <- getPassableFunction
+  findDownstairs' is_passable
+
+findDownstairs' :: (Alternative m, MonadWAI m)
+                => (LevelFeature -> Bool)
+                -> m ()
+findDownstairs' is_passable = do
   wstate <- askWorldState
   lvl <- getCurrentLevel wstate
   (_, cx, cy) <- currentScreen
@@ -296,10 +351,12 @@ findDownstairs = do
     else findWayToFeatures Downstairs
            (\d _ -> send d)
            (\d _ -> send d)
+           is_passable
 
 findClosedDoors :: (Alternative m, MonadWAI m)
                 => m ()
 findClosedDoors = do
+  is_passable <- getPassableFunction
   findWayToFeatures ClosedDoor
     (\d pos -> logTrace ("Next to closed door; will try to open. " <> show (d, pos)) $ do
       send $ "o" <> d
@@ -314,11 +371,13 @@ findClosedDoors = do
                                                     then LockedDoor
                                                     else old_feature))
     (\d pos -> logTrace ("Moving towards closed door at. " <> show pos) $ send d)
+    is_passable
 
 findLockedDoors :: (Alternative m, MonadWAI m) => m ()
 findLockedDoors = do
   wstate <- askWorldState
   when (hasSoreLegs wstate) empty
+  is_passable <- getPassableFunction
 
   findWayToFeatures LockedDoor
     (\d pos -> do
@@ -328,13 +387,15 @@ findLockedDoors = do
           modWorld $ execState $ inferSoreLegs 40
           empty)
     (\d pos -> logTrace ("Moving towards locked door at " <> show (d, pos)) $ send d)
+    is_passable
 
 findWayToFeatures :: (Alternative m, MonadWAI m)
                   => LevelFeature
                   -> (B.ByteString -> (Int, Int) -> m a)
                   -> (B.ByteString -> (Int, Int) -> m a)
+                  -> (LevelFeature -> Bool)
                   -> m a
-findWayToFeatures feature is_next towards_this_way = do
+findWayToFeatures feature is_next towards_this_way is_passable = do
   wstate <- askWorldState
   lvl <- getCurrentLevel wstate
   (_, cx, cy) <- currentScreen
@@ -347,6 +408,7 @@ findWayToFeatures feature is_next towards_this_way = do
   path <- al' $ levelSearch (cx, cy)
                             (\goal _ -> S.member goal targets)
                             lvl
+                            is_passable
 
   case path of
     [next_to_me] -> do
@@ -363,12 +425,15 @@ findMonsterKill = do
   (_, cx, cy) <- currentScreen
   lvl <- getCurrentLevel wstate
 
+  is_passable <- getPassableFunction
+
   let mset = M.keysSet $ M.filter (\m -> m^.isPeaceful == Just False &&
                                          m^.monster /= FloatingEyeMonster) $ (lvl^.monsters)
    in al' $
       levelSearch (cx, cy)
                   (\goal _ -> S.member goal mset && goal /= (cx, cy))
                   lvl
+                  is_passable
 
 findExplorablePath :: (Alternative m, MonadWAI m) => m [(Int, Int)]
 findExplorablePath = do
@@ -376,6 +441,7 @@ findExplorablePath = do
   (ss, cx, cy) <- currentScreen
   let (sw, sh) = screenSize ss
   lvl <- getCurrentLevel wstate
+  is_passable <- getPassableFunction
 
   -- Collect all places on the level that look "desirable" as exploration
   -- targets.
@@ -391,10 +457,11 @@ findExplorablePath = do
     al' $ levelSearch (cx, cy)
                       (\goal _ -> S.member goal desirables)
                       lvl
+                      is_passable
 
-isWalkableTransition :: Level -> (Int, Int) -> (Int, Int) -> ((Int, Int) -> Bool) -> Bool
-isWalkableTransition level (nx, ny) (x, y) exceptions =
-  (fmap isPassable (join $ level^?cells.ix (nx, ny).cellFeature) == Just True &&
+isWalkableTransition :: Level -> (Int, Int) -> (Int, Int) -> ((Int, Int) -> Bool) -> (LevelFeature -> Bool) -> Bool
+isWalkableTransition level (nx, ny) (x, y) exceptions is_passable =
+  (fmap is_passable (join $ level^?cells.ix (nx, ny).cellFeature) == Just True &&
    (S.notMember (nx, ny) $ level^.boulders) &&
    join (level^?monsters.at (nx, ny)) == Nothing &&
    diagonalFilter (nx, ny) (x, y)) ||
@@ -409,17 +476,18 @@ isWalkableTransition level (nx, ny) (x, y) exceptions =
 levelSearch :: (Int, Int)
             -> ((Int, Int) -> Maybe LevelCell -> Bool)
             -> Level
+            -> (LevelFeature -> Bool)
             -> Maybe [(Int, Int)]
-levelSearch start_pos is_goal level =
+levelSearch start_pos is_goal level is_passable =
   breadthFirstSearch start_pos
-                     (\pos -> getWalkableNeighbours level pos (\npos -> is_goal npos Nothing))
+                     (\pos -> getWalkableNeighbours level pos (\npos -> is_goal npos Nothing) is_passable)
                      (\(gx, gy) -> is_goal (gx, gy) (level^?cells.ix (gx, gy)))
 
-getWalkableNeighbours :: Level -> (Int, Int) -> ((Int, Int) -> Bool) -> [(Int, Int)]
-getWalkableNeighbours level (x, y) exceptions =
+getWalkableNeighbours :: Level -> (Int, Int) -> ((Int, Int) -> Bool) -> (LevelFeature -> Bool) -> [(Int, Int)]
+getWalkableNeighbours level (x, y) exceptions is_passable =
   [ (nx, ny) | nx <- [x-1..x+1], ny <- [y-1..y+1],
                (nx /= x || ny /= y) &&
-                isWalkableTransition level (nx, ny) (x, y) exceptions ]
+                isWalkableTransition level (nx, ny) (x, y) exceptions is_passable ]
 {-# INLINE getWalkableNeighbours #-}
 
 isDesirableExplorationTarget :: Level -> Int -> Int -> Bool
@@ -437,20 +505,24 @@ isDesirableExplorationTarget lvl x y =
 
     (isItemPassableSquare x y && lvl^?cells.ix (x, y).cellItems == Just PileSeen)
  where
+  is_passable = if lvl^.numTurnsInSearchStrategy >= 500
+                  then isPassableIncludeTraps
+                  else isPassable
+
   isItemPassableSquare x y = fromMaybe False $ do
     cell <- lvl^?cells.ix (x, y)
     guard (S.notMember (x, y) $ lvl^.boulders)
     guard (not $ M.member (x, y) $ lvl^.monsters)
     case cell^.cellFeature of
       Just InkyBlackness -> return True
-      Just feat -> return $ isPassable feat
+      Just feat -> return $ is_passable feat
       _ -> return True
 
   isPassableSquare x y = fromMaybe False $ do
     cell <- lvl^?cells.ix (x, y)
     guard (S.notMember (x, y) $ lvl^.boulders)
     guard (not $ M.member (x, y) $ lvl^.monsters)
-    guard (fromMaybe False $ isPassable <$> (cell^.cellFeature))
+    guard (fromMaybe False $ is_passable <$> (cell^.cellFeature))
     return True
 
   isExplorableBlackSquare x y = fromMaybe False $ do

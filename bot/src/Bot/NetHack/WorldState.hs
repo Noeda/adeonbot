@@ -29,6 +29,7 @@ module Bot.NetHack.WorldState
   , Level(..)
   , statues
   , whereSearchedLastTime
+  , numTurnsInSearchStrategy
   , hasStatue
   , emptyLevel
   , cells
@@ -36,6 +37,7 @@ module Bot.NetHack.WorldState
   , monsters
   , LevelFeature(..)
   , isPassable
+  , isPassableIncludeTraps
   , numberOfTimesSearched
   , LevelCell(..)
   , cellFeature
@@ -108,6 +110,7 @@ data LevelMeta = LevelMeta
 data Level = Level
   { _cells    :: !(A.Array (Int, Int) LevelCell)
   , _whereSearchedLastTime :: !(Maybe (Int, Int, Int))
+  , _numTurnsInSearchStrategy :: !Int
   , _statues :: !(S.Set (Int, Int))
   , _boulders :: !(S.Set (Int, Int))
   , _monsters :: !(M.Map (Int, Int) MonsterImage) }
@@ -119,7 +122,8 @@ instance ToJSON Level where
     , "whereSearchedLastTime" .= (_whereSearchedLastTime lvl)
     , "statues" .= (_statues lvl)
     , "boulders" .= (_boulders lvl)
-    , "monsters" .= (_monsters lvl) ]
+    , "monsters" .= (_monsters lvl)
+    , "num_turns_in_search_strategy" .= (_numTurnsInSearchStrategy lvl) ]
 
 instance FromJSON Level where
   parseJSON (Object ob) = do
@@ -128,12 +132,14 @@ instance FromJSON Level where
     statues <- ob .: "statues"
     boulders <- ob .: "boulders"
     monsters <- ob .: "monsters"
+    ntiss <- ob .: "num_turns_in_search_strategy"
     return Level
       { _cells = A.array bounds cells
       , _whereSearchedLastTime = searched_last_time
       , _statues = statues
       , _boulders = boulders
-      , _monsters = monsters }
+      , _monsters = monsters
+      , _numTurnsInSearchStrategy = ntiss }
 
   parseJSON _ = fail "FromJSON.Level: not an object"
 
@@ -175,6 +181,10 @@ isPassable Wall = False
 isPassable Fountain = True
 isPassable LockedDoor = False
 isPassable InkyBlackness = False
+
+isPassableIncludeTraps :: LevelFeature -> Bool
+isPassableIncludeTraps Trap = True
+isPassableIncludeTraps x = isPassable x
 
 data Monster
   = AmbiguousMonster       -- We see a monster here but don't know what type
@@ -290,7 +300,8 @@ emptyLevel = Level
   , _whereSearchedLastTime = Nothing
   , _boulders = S.empty
   , _statues = S.empty
-  , _monsters = M.empty }
+  , _monsters = M.empty
+  , _numTurnsInSearchStrategy = 0 }
 
 hasStatue :: Level -> (Int, Int) -> Bool
 hasStatue lvl pos = fromMaybe False (do

@@ -86,7 +86,8 @@ selectManyItems item_selector def = do
 
       (new_accumulator, bs) <- loop_selection def B.empty items
       unless (B.null bs) $
-        sendRaw $ bs <> " "
+        sendRaw bs
+      sendRaw " "
 
       selectManyItems item_selector new_accumulator
  where
