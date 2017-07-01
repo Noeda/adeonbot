@@ -314,7 +314,7 @@ findClosedDoors = do
           modWorld $ execState $ inferSquare pos (\_ -> OpenedDoor)
       when ("This door is locked." `elem` msgs) $
         logTrace ("Door is locked message received; inferring that door at " <> show pos <> " is locked.") $
-          modWorld $ execState $ inferSquare pos (\old_feature -> logTrace (show old_feature) $ if old_feature == ClosedDoor
+          modWorld $ execState $ inferSquare pos (\old_feature -> if old_feature == ClosedDoor
                                                     then LockedDoor
                                                     else old_feature))
     (\d pos -> logTrace ("Moving towards closed door at. " <> show pos) $ send d)
