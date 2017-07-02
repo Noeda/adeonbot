@@ -576,8 +576,8 @@ inferMonsters current_turn statuses ss lvl (cx, cy) monsters =
 
     -- The monster was moved or physically seen in previous processing?
     if (S.member (mx, my) old_monsters_visited || M.member (mx, my) moved_monsters) ||
-    -- Has it been less than 80 turns since the monster was last seen?
-       (current_turn - (old_monster^.lastPhysicallySeen) <= 80) ||
+    -- Has it been more than 80 turns since the monster was last seen?
+       (current_turn - (old_monster^.lastPhysicallySeen) >= 80) ||
     -- Are we right next to where the monster would be and not blind?
        (cx - mx <= 1 && cy - my <= 1 && Blind `S.notMember` statuses) ||
     -- Are we directly on top where monster should be?
