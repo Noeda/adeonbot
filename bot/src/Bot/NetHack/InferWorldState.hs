@@ -517,10 +517,8 @@ inferLevel lvl msgs = do
         Nothing -> do
           -- Remove InkyBlackness if there's an item in there
           let resetInkyBlackness = if old_cell^.cellFeature == Just InkyBlackness
-                                     then cellFeature .~ Nothing
+                                     then cellFeature .~ Just ItemPileFloor
                                      else id
-
-          A.writeArray mutcells (column, row) (old_cell & resetInkyBlackness)
 
           old_cell <- A.readArray mutcells (column, row)
 
@@ -528,6 +526,8 @@ inferLevel lvl msgs = do
           -- something about items?
           when (isItemSymbol (contents cell) (foregroundColor cell)) $ do
             let scell = show cell
+
+            A.writeArray mutcells (column, row) (old_cell & resetInkyBlackness)
 
             -- Mark item pile dirty if its appearance has changed from last
             -- time.

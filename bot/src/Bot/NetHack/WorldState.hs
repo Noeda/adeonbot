@@ -187,6 +187,7 @@ data LevelCell = LevelCell
 data LevelFeature
   = Wall                   -- Any wall like thing, can be black rock or | or -
   | Floor                  -- Floor things
+  | ItemPileFloor          -- There's an item pile here, no knowledge about actual floor though.
   | Downstairs
   | Upstairs
   | Fountain               -- For all your quaffing needs
@@ -203,6 +204,7 @@ data LevelFeature
 -- | Can I walk on it?
 isPassable :: LevelFeature -> Bool
 isPassable Floor = True
+isPassable ItemPileFloor = True
 isPassable Downstairs = True
 isPassable Upstairs = True
 isPassable ClosedDoor = False
