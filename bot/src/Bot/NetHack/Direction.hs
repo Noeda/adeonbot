@@ -28,7 +28,7 @@ data Direction
   | D1
   | D2
   | D3
-  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON, FromJSONKey, ToJSONKey )
 
 directionToLetter :: Direction -> Char
 directionToLetter D8 = 'k'

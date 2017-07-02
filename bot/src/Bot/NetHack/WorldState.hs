@@ -5,6 +5,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Bot.NetHack.WorldState
   ( WorldState(..)
@@ -75,10 +76,13 @@ module Bot.NetHack.WorldState
   , itemPile
   , corpseName
   , cleanRecentMonsterDeaths
-  , currentLevelT )
+  , currentLevelT
+  , failedWalks
+  , increaseFailedWalkCount )
   where
 
 import Bot.NetHack.Direction
+import Control.Monad.State.Strict ( execState )
 import Control.Lens hiding ( Level, levels, (.=) )
 import Data.Aeson
 import qualified Data.Array.IArray as A
@@ -128,6 +132,11 @@ data Level = Level
   , _numTurnsInSearchStrategy :: !Int
   , _statues :: !(S.Set (Int, Int))
   , _boulders :: !(S.Set (Int, Int))
+  -- Failed walks is used to detect when moving from some position to another
+  -- doesn't seem to work; so the movement can be blacklisted (think about
+  -- walking to open door diagonally if you never saw the door in the first
+  -- place)
+  , _failedWalks :: !(M.Map (Int, Int) (M.Map Direction (Turn, Int)))
   , _recentMonsterDeaths :: !(M.Map (Int, Int) [MonsterDeathImage])
   , _monsters :: !(M.Map (Int, Int) MonsterImage) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
@@ -140,7 +149,8 @@ instance ToJSON Level where
     , "boulders" .= (_boulders lvl)
     , "monsters" .= (_monsters lvl)
     , "num_turns_in_search_strategy" .= (_numTurnsInSearchStrategy lvl)
-    , "recent_monster_deaths" .= (_recentMonsterDeaths lvl) ]
+    , "recent_monster_deaths" .= (_recentMonsterDeaths lvl)
+    , "failed_walks" .= (_failedWalks lvl) ]
 
 instance FromJSON Level where
   parseJSON (Object ob) = do
@@ -151,6 +161,7 @@ instance FromJSON Level where
     monsters <- ob .: "monsters"
     ntiss <- ob .: "num_turns_in_search_strategy"
     monster_deaths <- ob .: "recent_monster_deaths"
+    failed_walks <- ob .: "failed_walks"
     return Level
       { _cells = A.array bounds cells
       , _whereSearchedLastTime = searched_last_time
@@ -158,7 +169,8 @@ instance FromJSON Level where
       , _boulders = boulders
       , _monsters = monsters
       , _recentMonsterDeaths = monster_deaths
-      , _numTurnsInSearchStrategy = ntiss }
+      , _numTurnsInSearchStrategy = ntiss
+      , _failedWalks = failed_walks }
 
   parseJSON _ = fail "FromJSON.Level: not an object"
 
@@ -334,7 +346,8 @@ emptyLevel = Level
   , _statues = S.empty
   , _monsters = M.empty
   , _recentMonsterDeaths = M.empty
-  , _numTurnsInSearchStrategy = 0 }
+  , _numTurnsInSearchStrategy = 0
+  , _failedWalks = M.empty }
 
 hasStatue :: Level -> (Int, Int) -> Bool
 hasStatue lvl pos = fromMaybe False (do
@@ -374,4 +387,12 @@ cleanRecentMonsterDeaths :: Int -> Level -> Level
 cleanRecentMonsterDeaths turn lvl = lvl &
   recentMonsterDeaths.each %~ (\death_images -> filter (\(MonsterDeathImage _name mturn) -> turn - mturn <= 350) death_images)
 
+increaseFailedWalkCount :: (Int, Int) -> Direction -> WorldState -> WorldState
+increaseFailedWalkCount pos dir = execState $ do
+  current_turn <- use turn
+  currentLevelT.failedWalks.at pos %= \case
+    Nothing -> Just (M.singleton dir (current_turn, 1))
+    Just mmap -> Just $ mmap & at dir %~ \case
+      Just (old_turn, x) | old_turn == current_turn -> Just (old_turn, x+1)
+      _ -> Just (current_turn, 1)
 

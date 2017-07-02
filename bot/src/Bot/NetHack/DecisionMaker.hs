@@ -21,7 +21,6 @@ import Bot.NetHack.WorldState
 import Control.Lens hiding ( Level, levels )
 import Control.Monad
 import Control.Monad.State.Strict
-import qualified Data.ByteString as B
 import Data.Data
 import Data.Foldable
 import qualified Data.IntMap.Strict as IM
@@ -44,7 +43,7 @@ decisionMaker = forever $ do
                             Just d -> logTrace (msg <> show (last path)) $
                               lift $ withAnswerer "Really attack"
                                 ((modWorld (execState $ inferPeaceful p)) >> send "n")
-                                (setLastDirectionMoved (Just d) >> send (directionToByteString d))
+                                (setLastDirectionMoved (Just d) >> moveToDirection' d)
                           _ -> empty
 
   withAnswerer "Call a"
@@ -170,9 +169,32 @@ pickUpSupplies = do
                    _ -> (0, counter)) num_food_items
                  modWorld $ execState dirtyInventory
                  yield
-    (p:_rest) -> do
-      d <- al' $ diffToSend (cx, cy) p
-      send d
+    (p:_rest) ->
+      moveToDirection (cx, cy) p
+
+moveToDirection' :: MonadWAI m => Direction -> m ()
+moveToDirection' dir = do
+  (_, cx1, cy1) <- currentScreen
+  wstate1 <- askWorldState
+  send $ directionToByteString dir
+  wstate2 <- askWorldState
+  (_, cx2, cy2) <- currentScreen
+  when (wstate1^.turn == wstate2^.turn && cx1 == cx2 && cy1 == cy2) $ do
+    logTrace ("Failed to move, increasing failed count at " <> show (cx1, cy1, dir)) $
+      modWorld (increaseFailedWalkCount (cx1, cy1) dir)
+
+moveToDirection :: (Alternative m, MonadWAI m) => (Int, Int) -> (Int, Int) -> m ()
+moveToDirection source target = do
+  dir <- al' $ diffToDir source target
+  let d = directionToByteString dir
+  (_, cx1, cy1) <- currentScreen
+  wstate1 <- askWorldState
+  send d
+  wstate2 <- askWorldState
+  (_, cx2, cy2) <- currentScreen
+  when (wstate1^.turn == wstate2^.turn && cx1 == cx2 && cy1 == cy2) $ do
+    logTrace ("Failed to move, increasing failed count at " <> show (cx1, cy1, dir)) $
+      modWorld (increaseFailedWalkCount (cx1, cy1) dir)
 
 getPassableFunction :: (Alternative m, MonadWAI m) => m (LevelFeature -> Bool)
 getPassableFunction = do
@@ -270,9 +292,7 @@ searchAround = do
                                   is_passable
 
         case path of
-          (p:_) -> case diffToSend (cx, cy) p of
-            Nothing -> empty
-            Just d -> send d
+          (p:_) -> moveToDirection (cx, cy) p
           _ -> empty
 
   searchableFolder :: M.Map (Int, Int) Int -> Level -> (Int, Int) -> Maybe ((Int, Int), Int) -> (Int, Int) -> Maybe ((Int, Int), Int)
@@ -430,8 +450,8 @@ findDownstairs' is_passable = do
   if join (lvl^?cells.ix (cx, cy).cellFeature) == Just Downstairs
     then send ">"
     else findWayToFeatures Downstairs
-           (\d _ -> send d)
-           (\d _ -> send d)
+           (\d _ -> moveToDirection' d)
+           (\d _ -> moveToDirection' d)
            is_passable
 
 findClosedDoors :: (Alternative m, MonadWAI m)
@@ -439,8 +459,8 @@ findClosedDoors :: (Alternative m, MonadWAI m)
 findClosedDoors = do
   is_passable <- getPassableFunction
   findWayToFeatures ClosedDoor
-    (\d pos -> logTrace ("Next to closed door; will try to open. " <> show (d, pos)) $ do
-      send $ "o" <> d
+    (\d pos -> logTrace ("Next to closed door; will try to open. " <> show d) $ do
+      send $ "o" <> directionToByteString d
       msgs <- askMessages
       when ("This door is already open." `elem` msgs) $ do
         wstate <- askWorldState
@@ -451,7 +471,7 @@ findClosedDoors = do
           modWorld $ execState $ inferSquare pos (\old_feature -> if old_feature == ClosedDoor
                                                     then LockedDoor
                                                     else old_feature))
-    (\d pos -> logTrace ("Moving towards closed door at. " <> show pos) $ send d)
+    (\d pos -> logTrace ("Moving towards closed door at. " <> show pos) $ moveToDirection' d)
     is_passable
 
 findLockedDoors :: (Alternative m, MonadWAI m) => m ()
@@ -462,18 +482,19 @@ findLockedDoors = do
 
   findWayToFeatures LockedDoor
     (\d pos -> do
-        logTrace ("Kicking door at " <> show (d, pos)) $ send $ "\x04" <> d
+        let move_bs = directionToByteString d
+        logTrace ("Kicking door at " <> show (d, pos)) $ send $ "\x04" <> move_bs
         msgs <- askMessages
         when (any (T.isInfixOf "is in no shape for kicking") msgs) $ do
           modWorld $ execState $ inferSoreLegs 40
           empty)
-    (\d pos -> logTrace ("Moving towards locked door at " <> show (d, pos)) $ send d)
+    (\d _pos -> logTrace ("Moving towards locked door at " <> show d) $ moveToDirection' d)
     is_passable
 
 findWayToFeatures :: (Alternative m, MonadWAI m)
                   => LevelFeature
-                  -> (B.ByteString -> (Int, Int) -> m a)
-                  -> (B.ByteString -> (Int, Int) -> m a)
+                  -> (Direction -> (Int, Int) -> m a)
+                  -> (Direction -> (Int, Int) -> m a)
                   -> (LevelFeature -> Bool)
                   -> m a
 findWayToFeatures feature is_next towards_this_way is_passable = do
@@ -493,10 +514,10 @@ findWayToFeatures feature is_next towards_this_way is_passable = do
 
   case path of
     [next_to_me] -> do
-      d <- al' $ diffToSend (cx, cy) next_to_me
+      d <- al' $ diffToDir (cx, cy) next_to_me
       is_next d next_to_me
     (p:_rest) -> do
-      d <- al' $ diffToSend (cx, cy) p
+      d <- al' $ diffToDir (cx, cy) p
       towards_this_way d p
     _ -> empty
 
@@ -542,12 +563,24 @@ findExplorablePath = do
 
 isWalkableTransition :: Level -> (Int, Int) -> (Int, Int) -> ((Int, Int) -> Bool) -> (LevelFeature -> Bool) -> Bool
 isWalkableTransition level (nx, ny) (x, y) exceptions is_passable =
-  (fmap is_passable (join $ level^?cells.ix (nx, ny).cellFeature) == Just True &&
-   (S.notMember (nx, ny) $ level^.boulders) &&
-   join (level^?monsters.at (nx, ny)) == Nothing &&
-   diagonalFilter (nx, ny) (x, y)) ||
-   (exceptions (nx, ny) && diagonalFilter (nx, ny) (x, y))
+  not_failed_walk_count_excluded && rest
+
  where
+  not_failed_walk_count_excluded = fromMaybe True $ do
+    mmap <- M.lookup (x, y) (level^.failedWalks)
+    dir <- diffToDir (x, y) (nx, ny)
+    (_failed_turn, count) <- M.lookup dir mmap
+    return $ not (count >= 10)
+
+  rest =
+    (fmap is_passable (join $ level^?cells.ix (nx, ny).cellFeature) == Just True &&
+     (S.notMember (nx, ny) $ level^.boulders) &&
+       join (level^?monsters.at (nx, ny)) == Nothing &&
+       diagonalFilter (nx, ny) (x, y)) ||
+
+     (exceptions (nx, ny) &&
+      diagonalFilter (nx, ny) (x, y))
+
   diagonalFilter (nx, ny) (x, y) =
     (nx == x || ny == y) ||
     ((join (level^?cells.ix (nx, ny).cellFeature) /= Just OpenedDoor) &&
