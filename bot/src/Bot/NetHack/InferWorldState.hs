@@ -609,7 +609,10 @@ inferMonsters current_turn statuses ss lvl (cx, cy) monsters =
                                    then [((x, y), mi)]
                                    else []
           in if M.size candidates == 1 -- We want unambiguous candidate so only copy the monster if there is one single candidate
-               then ((head $ M.elems candidates) { _lastPhysicallySeen = current_turn, _monsterObservedMoving = True }, S.insert (head $ M.keys candidates) old_monsters_visited)
+               then (let cand = head $ M.elems candidates
+                         (cand_x, cand_y) = head $ M.keys candidates
+                      in (cand { _lastPhysicallySeen = current_turn, _monsterObservedMoving = if cand_x /= mx || cand_y /= my then True else cand^.monsterObservedMoving },
+                          S.insert (head $ M.keys candidates) old_monsters_visited))
                else (def, old_monsters_visited)
 
      in if | foregroundColor == Blue && contents == "e"
