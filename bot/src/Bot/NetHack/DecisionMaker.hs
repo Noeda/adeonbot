@@ -53,6 +53,7 @@ decisionMaker = forever $ do
                  eatIfHungry <|>
                  pursue "Going towards monster at " findMonsterKill <|>
                  restIfLowHP <|>
+                 waitIfBlind <|>
                  eatCorpses <|>
                  pickUpSupplies <|>
                  pursue "Going towards an explorable at " findExplorablePath <|>
@@ -61,6 +62,17 @@ decisionMaker = forever $ do
                  findDownstairs <|>
                  searchAround <|>
                  logError "nothing to do")
+
+waitIfBlind :: (Alternative m, MonadWAI m) => m ()
+waitIfBlind = do
+  -- This action stops the bot from exploring shit when the bot is blind
+  wstate <- askWorldState
+
+  guard (Blind `S.member` (wstate^.statuses))
+
+  -- Do . instead of s. This makes it less likely that the bot will attack
+  -- peaceful monsters (only hostile monsters make themselves known).
+  send "."
 
 setLastDirectionMoved :: MonadWAI m => Maybe Direction -> m ()
 setLastDirectionMoved dir = modWorld $ lastDirectionMoved .~ dir
@@ -552,7 +564,9 @@ findMonsterKill = do
   is_passable <- getPassableFunction
 
   let mset = M.keysSet $ M.filter (\m -> m^.isPeaceful == Just False &&
-                                         m^.monster /= FloatingEyeMonster) $ (lvl^.monsters)
+                                         m^.monster /= FloatingEyeMonster &&
+                                         ((m^.monster /= NymphMonster) || (m^.monsterObservedMoving == True)))
+                                  (lvl^.monsters)
    in al' $
       levelSearch (cx, cy)
                   (\goal _ -> S.member goal mset && goal /= (cx, cy))

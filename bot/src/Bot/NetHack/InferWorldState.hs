@@ -593,7 +593,8 @@ inferMonsters current_turn statuses ss lvl (cx, cy) monsters =
         newmon m = MonsterImage { _monster = m
                                 , _isPeaceful = Nothing
                                 , _monsterAppearance = show cell
-                                , _lastPhysicallySeen = current_turn }
+                                , _lastPhysicallySeen = current_turn
+                                , _monsterObservedMoving = False }
         retmon (mi, new_mon) = (M.insert (mx, my) mi new_monsters, new_mon)
 
         -- If identical looking monster was next to this one (or at the same
@@ -608,13 +609,15 @@ inferMonsters current_turn statuses ss lvl (cx, cy) monsters =
                                    then [((x, y), mi)]
                                    else []
           in if M.size candidates == 1 -- We want unambiguous candidate so only copy the monster if there is one single candidate
-               then (head $ M.elems candidates, S.insert (head $ M.keys candidates) old_monsters_visited)
+               then ((head $ M.elems candidates) { _lastPhysicallySeen = current_turn, _monsterObservedMoving = True }, S.insert (head $ M.keys candidates) old_monsters_visited)
                else (def, old_monsters_visited)
 
      in if | foregroundColor == Blue && contents == "e"
              -> retmon $ monsterMovedMaybe $ newmon FloatingEyeMonster
            | foregroundColor == Magenta && contents == "h"
              -> retmon $ monsterMovedMaybe $ newmon AmbiguousMonster
+           | contents == "n"
+             -> retmon $ monsterMovedMaybe $ newmon NymphMonster
            | otherwise -> retmon $ monsterMovedMaybe $ newmon UnremarkableMonster
 
 isMonsterSymbol :: Char -> Bool
@@ -628,6 +631,7 @@ isMonsterSymbol c = case c of
   '@' -> True
   '~' -> True
   ']' -> True
+  'I' -> True
   _ -> False
 
 looksLikeMonster :: Level -> (Int, Int) -> Cell -> Bool

@@ -81,7 +81,8 @@ module Bot.NetHack.WorldState
   , lastPrayed
   , increaseFailedWalkCount
   , isSafeToPray
-  , lastPhysicallySeen )
+  , lastPhysicallySeen
+  , monsterObservedMoving )
   where
 
 import Bot.NetHack.Direction
@@ -229,6 +230,7 @@ data Monster
                            -- don't know if it's dwarf king of mind flayer.
   | UnremarkableMonster    -- Moves towards you and hits you. Most monsters are of this type.
   | FloatingEyeMonster     -- If you hit it directly, you get frozen.
+  | NymphMonster           -- Stealers.
   | MindFlayerMonster      -- Evil stuff.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
@@ -317,7 +319,8 @@ data MonsterImage = MonsterImage
   { _monster :: !Monster
   , _isPeaceful :: !(Maybe Bool)
   , _lastPhysicallySeen :: !Turn
-  , _monsterAppearance :: String }
+  , _monsterAppearance :: String
+  , _monsterObservedMoving :: !Bool }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 makeLenses ''MonsterImage
 makeLenses ''Level
