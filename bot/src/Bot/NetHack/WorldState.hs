@@ -78,7 +78,9 @@ module Bot.NetHack.WorldState
   , cleanRecentMonsterDeaths
   , currentLevelT
   , failedWalks
-  , increaseFailedWalkCount )
+  , lastPrayed
+  , increaseFailedWalkCount
+  , isSafeToPray )
   where
 
 import Bot.NetHack.Direction
@@ -115,6 +117,7 @@ data WorldState = WorldState
   , _soreLegsUntil      :: !Turn
   , _hp                 :: !Hitpoints
   , _maxHP              :: !Hitpoints
+  , _lastPrayed         :: !(Maybe Turn)
   , _turn               :: !Turn }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
@@ -236,7 +239,9 @@ data Status
   = Confstunned            -- Confused or stunned. Right now we treat them the same.
   | Blind                  -- Blind. Can't infer things about surroundings the same way.
   | FoodPoisoning          -- Oh my, what did you eat??? BAD BOT
-  | Hungry                 -- Hungry, Weak and Fainting all in one
+  | Hungry
+  | Weak
+  | Fainting
   | Satiated               -- Ate too much
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
@@ -329,7 +334,8 @@ emptyWorldState = WorldState
   , _maxHP = 1
   , _inventory = []
   , _inventoryDirty = True
-  , _turn = 1 }
+  , _turn = 1
+  , _lastPrayed = Nothing }
 
 emptyLevelCell :: LevelCell
 emptyLevelCell = LevelCell
@@ -395,4 +401,10 @@ increaseFailedWalkCount pos dir = execState $ do
     Just mmap -> Just $ mmap & at dir %~ \case
       Just (old_turn, x) | old_turn == current_turn -> Just (old_turn, x+1)
       _ -> Just (current_turn, 1)
+
+isSafeToPray :: WorldState -> Bool
+isSafeToPray wstate =
+  case wstate^.lastPrayed of
+    Nothing -> wstate^.turn >= 400
+    Just pray_turn -> pray_turn - (wstate^.turn) >= 800
 

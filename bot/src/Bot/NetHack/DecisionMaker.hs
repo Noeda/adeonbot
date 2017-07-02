@@ -49,6 +49,7 @@ decisionMaker = forever $ do
   withAnswerer "Call a"
     (send "\n") $
     runAbortAI_ (dywypi <|>
+                 prayIfInTrouble <|>
                  eatIfHungry <|>
                  pursue "Going towards monster at " findMonsterKill <|>
                  restIfLowHP <|>
@@ -63,6 +64,24 @@ decisionMaker = forever $ do
 
 setLastDirectionMoved :: MonadWAI m => Maybe Direction -> m ()
 setLastDirectionMoved dir = modWorld $ lastDirectionMoved .~ dir
+
+prayIfInTrouble :: (Alternative m, MonadWAI m) => m ()
+prayIfInTrouble = do
+  wstate <- askWorldState
+
+  guard (isSafeToPray wstate)
+
+  let stats = wstate^.statuses
+
+  -- What troubles are pray-worthy?
+  let should_pray = Weak `S.member` stats ||
+                    Fainting `S.member` stats ||
+                    FoodPoisoning `S.member` stats ||
+                    ( wstate^.hp <= (wstate^.maxHP `div` 7) ) ||
+                    ( wstate^.hp <= 5 )
+
+  unless should_pray empty
+  send "#pray\ny"
 
 restIfLowHP :: (Alternative m, MonadWAI m) => m ()
 restIfLowHP = do
@@ -353,7 +372,10 @@ searchAround = do
 eatIfHungry :: (Alternative m, MonadWAI m) => m ()
 eatIfHungry = do
   wstate <- askWorldState
-  if Hungry `S.member` (wstate^.statuses) && hasFoodInInventory wstate
+  if (Hungry `S.member` (wstate^.statuses) ||
+      Weak `S.member` (wstate^.statuses) ||
+      Fainting `S.member` (wstate^.statuses))
+     && hasFoodInInventory wstate
     then tryEating (const DontEatCorpse) True
     else empty
 

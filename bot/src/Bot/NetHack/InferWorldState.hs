@@ -11,6 +11,7 @@ module Bot.NetHack.InferWorldState
   , inferSearch
   , inferPeaceful
   , inferItemPileImage
+  , inferPraying
   , inferSoreLegs
   , dirtyInventory
   , setLastSearchedPosition
@@ -49,6 +50,7 @@ inferWorldState messages = execStateT $ do
   inferTurnCount
   inferHitpoints
   inferStatuses
+  inferPraying messages
   inferCurrentLevel messages
   inferRecentDeaths messages
 
@@ -155,13 +157,26 @@ inferStatuses = do
         "Conf" -> statuses %= S.insert Confstunned
         "Stun" -> statuses %= S.insert Confstunned
         "Hungry" -> statuses %= S.insert Hungry
-        "Weak" -> statuses %= S.insert Hungry
-        "Fainting" -> statuses %= S.insert Hungry
+        "Weak" -> statuses %= S.insert Weak
+        "Fainting" -> statuses %= S.insert Fainting
         "Satiated" -> statuses %= S.insert Satiated
         _ -> return ()
     _ -> return ()
 
-inferInventory :: MonadAI m => [T.Text] -> StateT WorldState m ()
+inferPraying :: (MonadAI m, MonadState WorldState m) => [T.Text] -> m ()
+inferPraying messages = do
+  let msgcheck m = any (T.isInfixOf m) messages
+
+  pturn <- use turn
+
+  when (msgcheck "You begin praying to") $ logTrace ("Prayed at turn " <> show pturn) $ do
+    -- Sometimes prayer modifies inventory (blesses items/smited) so trigger
+    -- inventory check as well.
+    inventoryDirty .= True
+    lastPrayed .= Just pturn
+    inferInventory messages
+
+inferInventory :: (MonadAI m, MonadState WorldState m) => [T.Text] -> m ()
 inferInventory messages = do
   let msgcheck m = any (T.isInfixOf m) messages
 
