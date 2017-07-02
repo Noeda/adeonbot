@@ -52,6 +52,9 @@ inferWorldState messages = execStateT $ do
   inferCurrentLevel messages
   inferRecentDeaths messages
 
+  wturn <- use turn
+  currentLevelT %= cleanRecentMonsterDeaths wturn
+
   lastDirectionMoved .= Nothing
 
 inferHitpoints :: (MonadAI m, MonadState WorldState m) => m ()
@@ -154,6 +157,7 @@ inferStatuses = do
         "Hungry" -> statuses %= S.insert Hungry
         "Weak" -> statuses %= S.insert Hungry
         "Fainting" -> statuses %= S.insert Hungry
+        "Satiated" -> statuses %= S.insert Satiated
         _ -> return ()
     _ -> return ()
 

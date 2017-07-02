@@ -15,6 +15,7 @@ library
                        Bot.NetHack.BFS
                        Bot.NetHack.Config
                        Bot.NetHack.DecisionMaker
+                       Bot.NetHack.EdibleCorpses
                        Bot.NetHack.InferWorldState
                        Bot.NetHack.InferWorldState.ItemNameParser
                        Bot.NetHack.InferWorldState.PeacefulCheck

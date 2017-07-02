@@ -4,6 +4,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Bot.NetHack.WorldState
   ( WorldState(..)
@@ -68,7 +69,13 @@ module Bot.NetHack.WorldState
   , enchantment
   , corrosion
   , quantity
-  , itemIdentity )
+  , itemIdentity
+  , itemPileImageAt
+  , itemPileAt
+  , itemPile
+  , corpseName
+  , cleanRecentMonsterDeaths
+  , currentLevelT )
   where
 
 import Bot.NetHack.Direction
@@ -218,6 +225,7 @@ data Status
   | Blind                  -- Blind. Can't infer things about surroundings the same way.
   | FoodPoisoning          -- Oh my, what did you eat??? BAD BOT
   | Hungry                 -- Hungry, Weak and Fainting all in one
+  | Satiated               -- Ate too much
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 data ItemPileImage
@@ -225,6 +233,12 @@ data ItemPileImage
   | PileSeen       -- We see a pile of items but don't know what they are
   | Pile ItemPile  -- We see a pile and know these items are on the pile
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
+
+itemPile :: Traversal' ItemPileImage ItemPile
+itemPile fun pileimage = case pileimage of
+  NoPile -> pure pileimage
+  PileSeen -> pure pileimage
+  Pile pile -> Pile <$> fun pile
 
 type ItemPile = [Item]
 
@@ -259,6 +273,7 @@ data ItemIdentity
   = Weapon !Int    -- Weapon; damage and base damage
   | Armor !Int !ArmorSlot !ArmorSpecial
   | Food           -- Safe food item
+  | Corpse T.Text  -- A corpse.
   | PickAxe        -- Pick-axe, nice murder weapon
   | Key            -- Can lock and unlock doors
   | CreditCard     -- Can unlock doors
@@ -268,6 +283,10 @@ data ItemIdentity
   | Statue
   | StrangeItem    -- No idea what this item is.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
+
+corpseName :: Traversal' ItemIdentity T.Text
+corpseName fun (Corpse corpse_name) = Corpse <$> fun corpse_name
+corpseName _fun iidentity = pure iidentity
 
 unlocksDoors :: ItemIdentity -> Bool
 unlocksDoors Key = True
@@ -335,4 +354,24 @@ hasFoodInInventory wstate = any isFood (wstate^.inventory)
 
 hasSoreLegs :: WorldState -> Bool
 hasSoreLegs wstate = wstate^.soreLegsUntil >= wstate^.turn
+
+currentLevelT :: Traversal' WorldState Level
+currentLevelT fun wstate =
+  case wstate^.levels.at (wstate^.currentLevel) of
+    Nothing -> pure wstate
+    Just lvl ->
+      (\newlvl -> wstate & levels.at (wstate^.currentLevel) .~ Just newlvl) <$>
+      fun lvl
+
+itemPileImageAt :: (Int, Int) -> Traversal' WorldState ItemPileImage
+itemPileImageAt pos fun wstate =
+  forOf (currentLevelT.cells.ix pos.cellItems) wstate fun
+
+itemPileAt :: (Int, Int) -> Traversal' WorldState ItemPile
+itemPileAt pos = itemPileImageAt pos.itemPile
+
+cleanRecentMonsterDeaths :: Int -> Level -> Level
+cleanRecentMonsterDeaths turn lvl = lvl &
+  recentMonsterDeaths.each %~ (\death_images -> filter (\(MonsterDeathImage _name mturn) -> turn - mturn <= 350) death_images)
+
 

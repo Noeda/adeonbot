@@ -3,6 +3,8 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Bot.NetHack.DecisionMaker
   ( decisionMaker )
@@ -10,6 +12,7 @@ module Bot.NetHack.DecisionMaker
 
 import Bot.NetHack.BFS
 import Bot.NetHack.Direction
+import Bot.NetHack.EdibleCorpses
 import Bot.NetHack.InferWorldState
 import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
@@ -19,6 +22,7 @@ import Control.Lens hiding ( Level, levels )
 import Control.Monad
 import Control.Monad.State.Strict
 import qualified Data.ByteString as B
+import Data.Data
 import Data.Foldable
 import qualified Data.IntMap.Strict as IM
 import Data.Maybe
@@ -26,7 +30,9 @@ import qualified Data.Map.Strict as M
 import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
+import GHC.Generics
 import Terminal.Screen
+import Text.Regex.TDFA hiding ( empty )
 
 decisionMaker :: Monad m => WAI m ()
 decisionMaker = forever $ do
@@ -47,6 +53,7 @@ decisionMaker = forever $ do
                  eatIfHungry <|>
                  pursue "Going towards monster at " findMonsterKill <|>
                  restIfLowHP <|>
+                 eatCorpses <|>
                  pickUpSupplies <|>
                  pursue "Going towards an explorable at " findExplorablePath <|>
                  findClosedDoors <|>
@@ -74,11 +81,48 @@ dywypi = do
     sendRaw " "
     sendRaw " "
     error "dywypi: I died"
+  when (T.isInfixOf "Do you want to see what you had" line) $ do
+    sendRaw "n"
+    sendRaw "q"
+    sendRaw " "
+    error "dywypi: I died"
   empty
 
 count :: Foldable f => (a -> Bool) -> f a -> Int
 count counter folding =
   foldl' (\val item -> if counter item then val+1 else val) 0 folding
+
+eatCorpses :: (Alternative m, MonadWAI m) => m ()
+eatCorpses = do
+  -- Eat corpses if not satiated and they are safe and we track that the corpse
+  -- should not be too old.
+  wstate <- askWorldState
+
+  -- Satiated check
+  guard (Satiated `S.notMember` (wstate^.statuses))
+
+  (_, cx, cy) <- currentScreen
+
+  -- Are there corpses on the current square?
+  let edibles = wstate ^.. itemPileAt (cx, cy).each.itemIdentity.corpseName.filtered isEdible
+
+  -- If there are no edibles, abort here
+  -- The eating function below also checks edibles but if we don't check then
+  -- we would be trying to eat every single turn...
+  when (null edibles) empty
+
+  let current_turn = wstate^.turn
+
+  -- Are the corpses too old?
+  whitelisted_monsters <- flip execStateT S.empty $ forOf_ (currentLevelT.recentMonsterDeaths.ix (cx, cy).each) wstate $ \(MonsterDeathImage name death_turn) ->
+    when (current_turn - death_turn <= 40) $
+      modify $ S.insert name
+
+  when (S.null whitelisted_monsters) $
+    logTrace ("Cannot eat corpses at " <> show (cx, cy) <> " because there is no guarantee they are fresh.") empty
+
+  -- Time to eat
+  tryEating (\x -> if isEdible x then logTrace ("Will attempt to eat corpse '" <> T.unpack x <> "'") EatCorpse else DontEatCorpse) False
 
 pickUpSupplies :: (Alternative m, MonadWAI m) => m ()
 pickUpSupplies = do
@@ -290,26 +334,71 @@ eatIfHungry :: (Alternative m, MonadWAI m) => m ()
 eatIfHungry = do
   wstate <- askWorldState
   if Hungry `S.member` (wstate^.statuses) && hasFoodInInventory wstate
-    then tryEating
+    then tryEating (const DontEatCorpse) True
     else empty
+
+data EatCorpseDecision
+  = EatCorpse
+  | DontEatCorpse
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
+-- | This function sends "e" and will try to eat according to instructions
+-- given.
+--
+-- First function should inform if any corpses should be eaten and it'll be
+-- tested on each corpse.
+--
+-- If second Bool is true, will try eat edible item from inventory.
+--
+-- If there are no food items to consume, invokes `empty`.
+tryEating :: (Alternative m, MonadWAI m)
+          => (T.Text -> EatCorpseDecision)
+          -> Bool
+          -> m ()
+tryEating corpse_eating_check eat_normal_food = do
+  (_, cx, cy) <- currentScreen
+  sendRaw "e"
+
+  exhaustCorpseEating cx cy
  where
-  tryEating = do
-    sendRaw "e"
+  exhaustCorpseEating cx cy = do
     line <- getScreenLine 0
-    when (T.isInfixOf "; eat it?" line || T.isInfixOf "; eat one?" line) $
-      logTrace "Saying no to eating corpse/food off ground" $ sendRaw "n"
+
+    case T.unpack line =~ ("There (is (a|an)|are) (.+) corpses? here; eat (it|one)\\?" :: String) :: [[String]] of
+      [[_whole, _isare, _aan, corpsename, _itone]] ->
+        if corpse_eating_check (T.pack corpsename) == EatCorpse
+          then do modWorld $ itemPileImageAt (cx, cy) .~ PileSeen
+                  send "y"
+          else do sendRaw "n"
+                  exhaustCorpseEating cx cy
+      _ -> nextStep
+
+  nextStep = do
     line <- getScreenLine 0
-    unless (T.isInfixOf "What do you want to eat" line) $
-      logTrace ("Unexpected response to 'e' command: " <> show line) empty
-    sendRaw "*"
-    bsm <- selectItem isFood
-    wstate <- askWorldState
-    let inv = wstate^.inventory
-    case bsm of
-      Nothing -> logTrace ("No food to eat for hunger (inv: " <> show inv <> ")") $ sendRaw "\x1b" >> empty
-      Just bs -> do
-        modWorld $ execState dirtyInventory
-        send bs
+    if | "You don't have anything to eat" `T.isInfixOf` line
+        -> do modWorld $ execState dirtyInventory
+              yield
+              empty
+
+       | "What do you want to eat" `T.isInfixOf` line && not eat_normal_food
+        -> do sendRaw "\x1b"
+              empty
+
+       | "What do you want to eat" `T.isInfixOf` line && eat_normal_food
+        -> do sendRaw "*"
+              bsm <- selectItem isFood
+              wstate <- askWorldState
+              let inv = wstate^.inventory
+              case bsm of
+                Nothing -> logTrace ("No food to eat for hunger (inv: " <> show inv <> ")") $ sendRaw "\x1b" >> empty
+                Just bs -> do
+                  modWorld $ execState dirtyInventory
+                  send bs
+
+       | otherwise
+        -> logTrace ("Unexpected response to 'e' command: " <> show line) empty
+
+  
 
 getCurrentLevel :: (Alternative m, Monad m) => WorldState -> m Level
 getCurrentLevel wstate =

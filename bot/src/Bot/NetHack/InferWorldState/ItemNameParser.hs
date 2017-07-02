@@ -28,7 +28,11 @@ nameToItem (T.strip -> txt'') = Item
  where
   txt' = T.unpack txt''
 
-  item_identity = case name of
+
+  item_identity | T.isSuffixOf " corpse" (T.pack name) =
+    Corpse (T.dropEnd 7 $ T.pack name)
+
+                | otherwise = case name of
 
     "food ration" -> Food
     "food rations" -> Food
@@ -165,7 +169,7 @@ nameToItem (T.strip -> txt'') = Item
     _ -> (Nothing, txt_buc_removed)
 
   -- foodstuff
-  (is_partly_eaten, partlyeaten_removed) = if isPrefixOf "partly eaten " enchantment_removed
+  (_is_partly_eaten, partlyeaten_removed) = if isPrefixOf "partly eaten " enchantment_removed
     then (True, drop 13 enchantment_removed)
     else (False, enchantment_removed)
 
