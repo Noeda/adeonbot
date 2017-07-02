@@ -284,9 +284,9 @@ searchAround = do
     --   If we see a corridor, with 5 sides as rock and one corridor behind it,
     --   we make that corridor much more desirable search target.
     --
-    --   .|
+    --   .|###
     --   .+####
-    --   .|   ^
+    --   .| ##^
     --      this spot here
     --
   

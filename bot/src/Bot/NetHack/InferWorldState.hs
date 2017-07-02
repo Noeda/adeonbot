@@ -423,6 +423,8 @@ inferLevel :: MonadAI m => Level -> [T.Text] -> StateT WorldState m Level
 inferLevel lvl msgs = do
   (ss, cx, cy) <- currentScreen
   statuses <- use statuses
+  current_turn <- use turn
+
   let (sw, sh) = screenSize ss
 
       new_cells = A.runSTArray $ do
@@ -434,7 +436,7 @@ inferLevel lvl msgs = do
 
       new_statues = inferStatues ss (lvl^.statues)
 
-      new_monsters = inferMonsters ss lvl (cx, cy) (lvl^.monsters)
+      new_monsters = inferMonsters current_turn statuses ss lvl (cx, cy) (lvl^.monsters)
 
   let updated_lvl = lvl & (cells .~ new_cells) .
                           (boulders .~ new_boulders) .
@@ -549,12 +551,13 @@ levelSquares = [ (x, y) | x <- [0..79], y <- [1..21] ]
 
 -- Given screenstate and old state of monsters, update it and return new
 -- state of monsters.
-inferMonsters :: ScreenState -> Level -> (Int, Int) -> M.Map (Int, Int) MonsterImage -> M.Map (Int, Int) MonsterImage
-inferMonsters ss lvl (cx, cy) monsters =
+inferMonsters :: Turn -> S.Set Status -> ScreenState -> Level -> (Int, Int) -> M.Map (Int, Int) MonsterImage -> M.Map (Int, Int) MonsterImage
+inferMonsters current_turn statuses ss lvl (cx, cy) monsters =
   -- Collect all squares that look like monsters
   let monster_squares = filter (\(x, y) -> looksLikeMonster lvl (x, y) $ getCell x y ss) levelSquares
       (unmoved_monsters, visited_old_monsters) = foldl' foldUnmovedMonsters (M.empty, S.empty) monster_squares
-      (final_monsters, _) = foldl' foldMonsters (unmoved_monsters, visited_old_monsters) monster_squares
+      (moved_monsters, visited_old_monsters2) = foldl' foldMonsters (unmoved_monsters, visited_old_monsters) monster_squares
+      (final_monsters, _) = foldl' foldMonsterMemory (moved_monsters, visited_old_monsters2) (M.assocs monsters)
    in final_monsters
  where
   foldUnmovedMonsters (new_monsters, old_monsters_visited) (mx, my)
@@ -564,8 +567,24 @@ inferMonsters ss lvl (cx, cy) monsters =
     let cell@Cell{..} = getCell mx my ss
      in case M.lookup (mx, my) monsters of
           Just mon | mon^.monsterAppearance == show cell ->
-            (M.insert (mx, my) mon new_monsters, S.insert (mx, my) old_monsters_visited)
+            (M.insert (mx, my) (mon & lastPhysicallySeen .~ current_turn) new_monsters, S.insert (mx, my) old_monsters_visited)
           _ -> (new_monsters, old_monsters_visited)
+
+  foldMonsterMemory (moved_monsters, old_monsters_visited) ((mx, my), old_monster) =
+    -- This part is monster permanence handling. There are various conditions
+    -- where we forget monster and these are below.
+
+    -- The monster was moved or physically seen in previous processing?
+    if (S.member (mx, my) old_monsters_visited || M.member (mx, my) moved_monsters) ||
+    -- Has it been less than 80 turns since the monster was last seen?
+       (current_turn - (old_monster^.lastPhysicallySeen) <= 80) ||
+    -- Are we right next to where the monster would be and not blind?
+       (cx - mx <= 1 && cy - my <= 1 && Blind `S.notMember` statuses) ||
+    -- Are we directly on top where monster should be?
+       (cx == mx && cy == my)
+
+      then (moved_monsters, old_monsters_visited)
+      else (M.insert (mx, my) old_monster moved_monsters, S.insert (mx, my) old_monsters_visited)
 
   foldMonsters (new_monsters, old_monsters_visited) (mx, my) | mx == cx && my == cy = (new_monsters, old_monsters_visited)
   foldMonsters (new_monsters, old_monsters_visited) (mx, my) | M.member (mx, my) new_monsters = (new_monsters, old_monsters_visited)
@@ -573,7 +592,8 @@ inferMonsters ss lvl (cx, cy) monsters =
     let cell@Cell{..} = getCell mx my ss
         newmon m = MonsterImage { _monster = m
                                 , _isPeaceful = Nothing
-                                , _monsterAppearance = show cell }
+                                , _monsterAppearance = show cell
+                                , _lastPhysicallySeen = current_turn }
         retmon (mi, new_mon) = (M.insert (mx, my) mi new_monsters, new_mon)
 
         -- If identical looking monster was next to this one (or at the same

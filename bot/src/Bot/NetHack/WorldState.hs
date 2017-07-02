@@ -80,7 +80,8 @@ module Bot.NetHack.WorldState
   , failedWalks
   , lastPrayed
   , increaseFailedWalkCount
-  , isSafeToPray )
+  , isSafeToPray
+  , lastPhysicallySeen )
   where
 
 import Bot.NetHack.Direction
@@ -315,6 +316,7 @@ unlocksDoors _ = False
 data MonsterImage = MonsterImage
   { _monster :: !Monster
   , _isPeaceful :: !(Maybe Bool)
+  , _lastPhysicallySeen :: !Turn
   , _monsterAppearance :: String }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 makeLenses ''MonsterImage
