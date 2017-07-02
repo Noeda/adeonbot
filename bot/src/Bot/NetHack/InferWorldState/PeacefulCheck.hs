@@ -60,8 +60,15 @@ checkPeacefulness (x, y) = do
         if T.isInfixOf "statue of" monname
           then do ll.monsters.at (x, y) .= Nothing
                   ll.statues %= S.insert (x, y)
+
           else do let is_peaceful = T.isInfixOf "peaceful" monname
                   ll.monsters.at (x, y)._Just.isPeaceful .= Just is_peaceful
                   ll.statues %= S.delete (x, y)
+
+        ll.cells.ix (x, y).cellFeature %= \old_feature ->
+          if old_feature == Just InkyBlackness || old_feature == Nothing
+            then logTrace ("Inferring " <> show (x, y) <> " to be item pile floor.") $ Just ItemPileFloor
+            else old_feature
+
       _ -> return ()
 
