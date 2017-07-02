@@ -18,14 +18,17 @@ module Bot.NetHack.InferWorldState
   , levelSquares )
   where
 
+import Bot.NetHack.Direction
 import Bot.NetHack.InferWorldState.ItemNameParser
 import Bot.NetHack.InferWorldState.PeacefulCheck
 import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
 import Bot.NetHack.ScreenPattern
+import Bot.NetHack.WordTools
 import Bot.NetHack.WorldState
 import Control.Lens hiding ( Level, levels )
 import Control.Monad.State.Strict
+import Control.Monad.Trans.Maybe
 import qualified Data.Array.MArray as A
 import qualified Data.Array.ST as A
 import Data.Foldable
@@ -36,6 +39,7 @@ import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Traversable ( for )
+import Text.Regex.TDFA
 import Terminal.Screen
 
 -- | Uses what is currently seen on the screen to infer and update bot's world
@@ -46,6 +50,9 @@ inferWorldState messages = execStateT $ do
   inferHitpoints
   inferStatuses
   inferCurrentLevel messages
+  inferRecentDeaths messages
+
+  lastDirectionMoved .= Nothing
 
 inferHitpoints :: (MonadAI m, MonadState WorldState m) => m ()
 inferHitpoints =
@@ -195,7 +202,35 @@ inferInventory messages = do
         send " "
         (items <>) <$> exhaustInventory
 
+inferRecentDeaths :: MonadAI m => [T.Text] -> StateT WorldState m ()
+inferRecentDeaths messages = do
+  -- This thing looks for messages like "You kill the newt!" and then adds
+  -- information that newt died in direction X at turn Y.
+  --
+  -- Ultimately that's used to determine if we can safely eat corpse at some
+  -- square.
+  st <- use statuses
+  ldm <- use lastDirectionMoved
+  (_ss, cx, cy) <- currentScreen
+  curturn <- use turn
 
+  void $ runMaybeT $ do
+    let Just dir = ldm
+        tgt_pos = movePosByDir (cx, cy) dir
+    guard (Confstunned `S.notMember` st)
+
+    lift $ for_ messages $ \msg -> do
+      case (T.unpack msg) =~ killRegex :: [[String]] of
+        [[_whole, _killmethod, target']] -> do
+          let target = stripMonsterPrefixes $ T.pack target'
+          logTrace ("Killed monster '" <> T.unpack target <> "' at " <> show tgt_pos <> ", recoding the event.") $ do
+            cl <- use currentLevel
+            levels.at cl._Just.recentMonsterDeaths.at tgt_pos %= \deaths ->
+              Just (fromMaybe [] deaths <> [MonsterDeathImage target curturn])
+        _ -> return ()
+ where
+  killRegex = "You (kill|destroy) (.+)!" :: String
+  
 inferCurrentLevel :: MonadAI m => [T.Text] -> StateT WorldState m ()
 inferCurrentLevel messages = do
   inferLevelIndex

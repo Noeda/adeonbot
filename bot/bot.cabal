@@ -26,6 +26,8 @@ library
                        Bot.NetHack.Synchronizer
                        Bot.NetHack.WorldState
                        Bot.NetHack.WebDiagnostics
+                       Bot.NetHack.Direction
+                       Bot.NetHack.WordTools
   build-depends:       aeson
                       ,array
                       ,async

@@ -7,11 +7,13 @@
 
 module Bot.NetHack.WorldState
   ( WorldState(..)
+  , MonsterDeathImage(..)
   , Turn
   , Hitpoints
   , LevelIndex
   , hasFoodInInventory
   , hasSoreLegs
+  , lastDirectionMoved
   , soreLegsUntil
   , hp
   , maxHP
@@ -27,6 +29,7 @@ module Bot.NetHack.WorldState
   , levelDescription
   , branchName
   , Level(..)
+  , recentMonsterDeaths
   , statues
   , whereSearchedLastTime
   , numTurnsInSearchStrategy
@@ -68,6 +71,7 @@ module Bot.NetHack.WorldState
   , itemIdentity )
   where
 
+import Bot.NetHack.Direction
 import Control.Lens hiding ( Level, levels, (.=) )
 import Data.Aeson
 import qualified Data.Array.IArray as A
@@ -90,21 +94,25 @@ type EnchantmentLevel = Int
 -- Kept in easily serializable form so bot's view of the world can be easily
 -- saved.
 data WorldState = WorldState
-  { _levels         :: !(IM.IntMap Level)
-  , _levelMeta      :: !(IM.IntMap LevelMeta)
-  , _currentLevel   :: !LevelIndex
-  , _statuses       :: !(S.Set Status)
-  , _inventory      :: ![Item]
-  , _inventoryDirty :: !Bool
-  , _soreLegsUntil  :: !Turn
-  , _hp             :: !Hitpoints
-  , _maxHP          :: !Hitpoints
-  , _turn           :: !Turn }
+  { _levels             :: !(IM.IntMap Level)
+  , _levelMeta          :: !(IM.IntMap LevelMeta)
+  , _currentLevel       :: !LevelIndex
+  , _lastDirectionMoved :: !(Maybe Direction)
+  , _statuses           :: !(S.Set Status)
+  , _inventory          :: ![Item]
+  , _inventoryDirty     :: !Bool
+  , _soreLegsUntil      :: !Turn
+  , _hp                 :: !Hitpoints
+  , _maxHP              :: !Hitpoints
+  , _turn               :: !Turn }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data LevelMeta = LevelMeta
   { _levelDescription :: !T.Text
   , _branchName       :: !T.Text }
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
+
+data MonsterDeathImage = MonsterDeathImage !T.Text !Int
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data Level = Level
@@ -113,6 +121,7 @@ data Level = Level
   , _numTurnsInSearchStrategy :: !Int
   , _statues :: !(S.Set (Int, Int))
   , _boulders :: !(S.Set (Int, Int))
+  , _recentMonsterDeaths :: !(M.Map (Int, Int) [MonsterDeathImage])
   , _monsters :: !(M.Map (Int, Int) MonsterImage) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
@@ -123,7 +132,8 @@ instance ToJSON Level where
     , "statues" .= (_statues lvl)
     , "boulders" .= (_boulders lvl)
     , "monsters" .= (_monsters lvl)
-    , "num_turns_in_search_strategy" .= (_numTurnsInSearchStrategy lvl) ]
+    , "num_turns_in_search_strategy" .= (_numTurnsInSearchStrategy lvl)
+    , "recent_monster_deaths" .= (_recentMonsterDeaths lvl) ]
 
 instance FromJSON Level where
   parseJSON (Object ob) = do
@@ -133,12 +143,14 @@ instance FromJSON Level where
     boulders <- ob .: "boulders"
     monsters <- ob .: "monsters"
     ntiss <- ob .: "num_turns_in_search_strategy"
+    monster_deaths <- ob .: "recent_monster_deaths"
     return Level
       { _cells = A.array bounds cells
       , _whereSearchedLastTime = searched_last_time
       , _statues = statues
       , _boulders = boulders
       , _monsters = monsters
+      , _recentMonsterDeaths = monster_deaths
       , _numTurnsInSearchStrategy = ntiss }
 
   parseJSON _ = fail "FromJSON.Level: not an object"
@@ -279,6 +291,7 @@ emptyWorldState = WorldState
   { _levels = IM.empty
   , _levelMeta = IM.empty
   , _statuses = S.empty
+  , _lastDirectionMoved = Nothing
   , _currentLevel = 1
   , _soreLegsUntil = 1
   , _hp = 1
@@ -301,6 +314,7 @@ emptyLevel = Level
   , _boulders = S.empty
   , _statues = S.empty
   , _monsters = M.empty
+  , _recentMonsterDeaths = M.empty
   , _numTurnsInSearchStrategy = 0 }
 
 hasStatue :: Level -> (Int, Int) -> Bool

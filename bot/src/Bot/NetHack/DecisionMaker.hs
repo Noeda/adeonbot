@@ -9,6 +9,7 @@ module Bot.NetHack.DecisionMaker
   where
 
 import Bot.NetHack.BFS
+import Bot.NetHack.Direction
 import Bot.NetHack.InferWorldState
 import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
@@ -37,7 +38,7 @@ decisionMaker = forever $ do
                             Just d -> logTrace (msg <> show (last path)) $
                               lift $ withAnswerer "Really attack"
                                 ((modWorld (execState $ inferPeaceful p)) >> send "n")
-                                (send d)
+                                (setLastDirectionMoved (Just d) >> send (directionToByteString d))
                           _ -> empty
 
   withAnswerer "Call a"
@@ -53,6 +54,9 @@ decisionMaker = forever $ do
                  findDownstairs <|>
                  searchAround <|>
                  logError "nothing to do")
+
+setLastDirectionMoved :: MonadWAI m => Maybe Direction -> m ()
+setLastDirectionMoved dir = modWorld $ lastDirectionMoved .~ dir
 
 restIfLowHP :: (Alternative m, MonadWAI m) => m ()
 restIfLowHP = do
@@ -123,7 +127,7 @@ pickUpSupplies = do
                  modWorld $ execState dirtyInventory
                  yield
     (p:_rest) -> do
-      d <- al' $ diffToDir (cx, cy) p
+      d <- al' $ diffToSend (cx, cy) p
       send d
 
 getPassableFunction :: (Alternative m, MonadWAI m) => m (LevelFeature -> Bool)
@@ -222,7 +226,7 @@ searchAround = do
                                   is_passable
 
         case path of
-          (p:_) -> case diffToDir (cx, cy) p of
+          (p:_) -> case diffToSend (cx, cy) p of
             Nothing -> empty
             Just d -> send d
           _ -> empty
@@ -315,18 +319,6 @@ getCurrentLevel wstate =
         Nothing -> empty
         Just lvl -> return lvl
 
-diffToDir :: (Int, Int) -> (Int, Int) -> Maybe B.ByteString
-diffToDir (x1, y1) (x2, y2) =
-  if | x1 == x2 && y1 == y2-1 -> Just "j"
-     | x1 == x2 && y1 == y2+1 -> Just "k"
-     | x1 == x2-1 && y1 == y2 -> Just "l"
-     | x1 == x2+1 && y1 == y2 -> Just "h"
-     | x1 == x2-1 && y1 == y2-1 -> Just "n"
-     | x1 == x2+1 && y1 == y2-1 -> Just "b"
-     | x1 == x2-1 && y1 == y2+1 -> Just "u"
-     | x1 == x2+1 && y1 == y2+1 -> Just "y"
-     | otherwise -> Nothing
-
 al' :: (Alternative m, MonadAI m) => Maybe a -> m a
 al' = \case
   Nothing -> empty
@@ -412,10 +404,10 @@ findWayToFeatures feature is_next towards_this_way is_passable = do
 
   case path of
     [next_to_me] -> do
-      d <- al' $ diffToDir (cx, cy) next_to_me
+      d <- al' $ diffToSend (cx, cy) next_to_me
       is_next d next_to_me
     (p:_rest) -> do
-      d <- al' $ diffToDir (cx, cy) p
+      d <- al' $ diffToSend (cx, cy) p
       towards_this_way d p
     _ -> empty
 
@@ -536,4 +528,13 @@ isDesirableExplorationTarget lvl x y =
 neighboursOf :: Int -> Int -> [(Int, Int)]
 neighboursOf x y =
   [(nx, ny) | nx <- [x-1..x+1], ny <- [y-1..y+1], nx /= x || ny /= y]
+
+modLevel :: (Alternative m, MonadWAI m) => (Level -> Level) -> m ()
+modLevel level_mod = do
+  wstate <- askWorldState
+  let curlvl = wstate^.currentLevel
+      mlvl = wstate^.levels.at curlvl
+  case mlvl of
+    Nothing -> empty
+    Just lvl -> modWorld $ levels.at curlvl .~ (Just $ level_mod lvl)
 
