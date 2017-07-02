@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 int64_t make_pty_and_fork( const char* path, const char** args, int* err, int w, int h, int* masterfd_ptr )
 {
@@ -21,11 +22,17 @@ int64_t make_pty_and_fork( const char* path, const char** args, int* err, int w,
     char buf[1024];
     memset(buf, 0, 1024);
 
+#ifndef __FreeBSD__
     if ( ptsname_r(masterfd, buf, 1023) == -1 ) {
         (*err) = errno;
         close(masterfd);
         return -1;
     }
+#else
+    char* nm = ptsname(masterfd);
+    strncpy(buf, nm, 1023);
+    buf[1023] = 0;
+#endif
 
     if ( grantpt(masterfd) == -1 ) {
         (*err) = errno;

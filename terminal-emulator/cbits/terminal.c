@@ -6,7 +6,10 @@
 #include <errno.h>
 #include <termios.h>
 #include <string.h>
+
+#ifndef __FreeBSD__
 #include <pty.h>
+#endif
 
 void free_err_msg( char* errmsg )
 {
