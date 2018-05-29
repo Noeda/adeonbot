@@ -19,6 +19,7 @@ module Bot.NetHack.InferWorldState
   , levelSquares )
   where
 
+import Control.Applicative
 import Bot.NetHack.Direction
 import Bot.NetHack.InferWorldState.ItemNameParser
 import Bot.NetHack.InferWorldState.PeacefulCheck
@@ -234,8 +235,8 @@ inferRecentDeaths messages = do
   curturn <- use turn
 
   void $ runMaybeT $ do
-    let Just dir = ldm
-        tgt_pos = movePosByDir (cx, cy) dir
+    dir <- maybe Control.Applicative.empty pure ldm
+    let tgt_pos = movePosByDir (cx, cy) dir
     guard (Confstunned `S.notMember` st)
 
     lift $ for_ messages $ \msg -> do
