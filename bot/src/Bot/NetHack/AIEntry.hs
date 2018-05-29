@@ -78,10 +78,11 @@ serverLogin :: MonadAI m => BotConfig -> m Bool
 serverLogin bc = matchfirst $
   [ ("l) Login", send "l")
   , ("Please enter your username", send ( (T.encodeUtf8 $ playername bc) <> "\n" ))
-  , ("2) Go to NetHack 3.4.3 menu", send "2")
-  , ("p) Play NetHack 3.4.3", send "p")
-  , ("3) Go to NetHack 3.6.1-dev menu", send "3")   -- NAO
-  , ("p) Play NetHack 3.6.1-DEV", send "p")
+  -- Disable 3.4.3 NetHack
+  -- , ("2) Go to NetHack 3.4.3 menu", send "2")
+  -- , ("p) Play NetHack 3.4.3", send "p")
+  , ("3) Go to NetHack 3.6.1 menu", send "3")   -- NAO
+  , ("p) Play NetHack 3.6.1", send "p")
   , ("n) Play NetHack 3.6.0", send "n") ] ++ password_item
  where
   password_item = case password bc of
