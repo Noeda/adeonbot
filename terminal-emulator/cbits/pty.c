@@ -30,8 +30,7 @@ int64_t make_pty_and_fork( const char* path, const char** args, int* err, int w,
     }
 #else
     char* nm = ptsname(masterfd);
-    strncpy(buf, nm, 1023);
-    buf[1023] = 0;
+    strlcpy(buf, nm, 1024);
 #endif
 
     if ( grantpt(masterfd) == -1 ) {
