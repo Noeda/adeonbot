@@ -85,7 +85,7 @@ botEntry config activity_report_tvar update_world = do
       when (isJust sending) retry
 
       writeTVar activity_report_tvar $ (old_ar { pendingDataSend = True }, Just bs)
-    
+
   bot_runner state screen_state cx cy = do
     -- Oscillation check; has turn count changed in last N seconds?
     now <- getCurrentTime
@@ -181,18 +181,18 @@ run config = withRawTerminalMode $ do
             -- Update lastActivityObserved ASAP
             now <- liftIO $ toNanoSecs <$> getTime Monotonic
             liftIO $ atomically $ modifyTVar activity_report_tvar $ \(ar, sending) -> (ar { lastActivityObserved = now, processingInput = True }, sending)
-  
+
             (st, emu, cx, cy) <- get
-  
+
             let ((new_st, new_emu, new_cx, new_cy), stm) = runST $ do
                                       thawed <- thawScreen st
                                       exhaust thawed st bs emu cx cy activity_report_tvar
-  
-  	  -- Force evaluation of all things (we have to be able to trust the
-  	  -- `now` and `processingInput` assignments below to reflect that
-  	  -- input actually was processed)
+
+          -- Force evaluation of all things (we have to be able to trust the
+          -- `now` and `processingInput` assignments below to reflect that
+          -- input actually was processed)
             void $ liftIO $ evaluate $ force $ new_st `deepseq` new_cx `deepseq` new_cy `deepseq` ()
-  
+
             liftIO $ do
               now <- toNanoSecs <$> getTime Monotonic
               atomically $ do
@@ -203,7 +203,7 @@ run config = withRawTerminalMode $ do
                       , cursorY = new_cy
                       , processingInput = False }, sending)
                 stm
-    
+
             put (new_st, new_emu, new_cx, new_cy)
             liftIO $ do
               BL.putStr (toANSIOutput Nothing new_st)
@@ -215,7 +215,7 @@ run config = withRawTerminalMode $ do
           -> Emulator ()
           -> Int
           -> Int
-	  -> TVar (ActivityReport, Maybe B.ByteString)
+          -> TVar (ActivityReport, Maybe B.ByteString)
           -> ST s ((ScreenState, Emulator (), Int, Int), STM ())
   exhaust thawed st bs emu cx cy activity_report_tvar = do
     case emu of
@@ -227,8 +227,8 @@ run config = withRawTerminalMode $ do
       Free (YieldEndOfData next) -> do
         (r, io) <- exhaust thawed st bs next cx cy activity_report_tvar
         return (r, do io
-		      (ar, st) <- readTVar activity_report_tvar
-		      writeTVar activity_report_tvar (ar { endOfDataObserved = True }, st))
+                      (ar, st) <- readTVar activity_report_tvar
+                      writeTVar activity_report_tvar (ar { endOfDataObserved = True }, st))
 
       Free (ReadByte fun) ->
         if B.null bs

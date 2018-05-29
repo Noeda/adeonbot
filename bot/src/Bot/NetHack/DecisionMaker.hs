@@ -687,12 +687,3 @@ neighboursOf :: Int -> Int -> [(Int, Int)]
 neighboursOf x y =
   [(nx, ny) | nx <- [x-1..x+1], ny <- [y-1..y+1], nx /= x || ny /= y]
 
-modLevel :: (Alternative m, MonadWAI m) => (Level -> Level) -> m ()
-modLevel level_mod = do
-  wstate <- askWorldState
-  let curlvl = wstate^.currentLevel
-      mlvl = wstate^.levels.at curlvl
-  case mlvl of
-    Nothing -> empty
-    Just lvl -> modWorld $ levels.at curlvl .~ (Just $ level_mod lvl)
-
