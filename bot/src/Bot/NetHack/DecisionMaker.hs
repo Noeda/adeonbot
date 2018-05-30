@@ -5,6 +5,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Bot.NetHack.DecisionMaker
   ( decisionMaker )
@@ -29,7 +30,7 @@ import qualified Data.Map.Strict as M
 import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
-import GHC.Generics
+import GHC.Generics hiding ( to )
 import Terminal.Screen
 import Text.Regex.TDFA hiding ( empty )
 
@@ -60,6 +61,7 @@ decisionMaker = forever $ do
                  findClosedDoors <|>
                  findLockedDoors <|>
                  findDownstairs <|>
+                 pushBoulders <|>
                  searchAround <|>
                  logError "nothing to do")
 
@@ -525,6 +527,103 @@ findLockedDoors = do
     (\d _pos -> logTrace ("Moving towards locked door at " <> show d) $ moveToDirection' d)
     is_passable
 
+pushBoulders :: forall m. (Alternative m, MonadWAI m) => m ()
+pushBoulders = do
+  -- Boulder pusher:
+  --
+  -- Sometimes the bot doesn't know where downstairs are. What to do?
+  -- Something that should be tried before searching everywhere is pushing all
+  -- known boulders.
+  --
+  -- This function will find any boulders, that can be pushed from some
+  -- direction we have not tried before and tries to push the boulder.
+  wstate <- askWorldState
+  lvl <- getCurrentLevel wstate
+  (_, cx, cy) <- currentScreen
+
+  -- We need to get positions where we could push boulders.
+  let bolds = S.toList $ lvl^.boulders
+
+  -- Stop here if there are no boulders on the level.
+  guard (not $ null bolds)
+
+  -- Build candidate list of pushings
+  let pushing_candidates1 :: [((Int, Int), (Int, Int))]
+      pushing_candidates1 = concat $ bolds <&> \(bx, by) ->
+        concat $ neighboursOf bx by <&> \(px, py) ->
+          if M.notMember (px, py) (lvl^.boulderAtPushedFrom (bx, by))
+            then [((px, py), (bx, by))]
+            else []
+
+      -- Organize candidates to a map. Some candidate pushing locations can
+      -- push more than one boulder (e.g. two boulders side-by-side, you can
+      -- choose to push either of them from a location).
+      pushing_candidates :: M.Map (Int, Int) (S.Set (Int, Int))
+      pushing_candidates = M.fromListWith S.union $ pushing_candidates1 & each._2 %~ S.singleton
+
+  -- Stop here if there are no candidates we can push
+  guard (not $ M.null pushing_candidates)
+
+  -- Are we already at some candidate?
+  -- If yes, do pushing thing.
+  -- Otherwise, walk towards closest push candidate
+  if (cx, cy) `M.member` pushing_candidates
+    then doPushing (cx, cy) pushing_candidates
+    else moveTowardsPushers lvl (cx, cy) pushing_candidates
+ where
+  doPushing :: (Int, Int) -> M.Map (Int, Int) (S.Set (Int, Int)) -> m ()
+  doPushing start_pos pushing_candidates = do
+    -- What are the candidates for pushing?
+    let set_cands = fromMaybe S.empty $ M.lookup start_pos pushing_candidates
+    -- Check (again) that the candidates are not null.
+    guard $ not $ S.null set_cands
+
+    -- Which candidate do we pick? (as in, we can have more than one boulder
+    -- next to us).
+    --
+    -- Right now we simply pick the minimum (which in practice means most
+    -- leftmost and most upmost boulder).
+    let target_pos = head $ S.toList set_cands
+
+    logTrace ("Pushing boulder at " <> show start_pos <> " towards " <> show target_pos) $ do
+      -- Mark the boulder as being pushed
+      wstate <- askWorldState
+      let curlvl = wstate^.currentLevel
+
+      modWorld $ levels.at curlvl._Just.boulderAtPushedFrom target_pos %~ M.insert start_pos (BoulderPushInfo Nothing)
+      moveToDirection start_pos target_pos
+
+      -- Was there a monster behind the boulder?
+      -- If yes, still set the flag but let it expire in 20 turns.
+      msgs <- askMessages
+      when ("You hear a monster behind the boulder." `elem` msgs) $
+        logTrace "Monster behind a boulder." $
+          modWorld $ levels.at curlvl._Just.boulderAtPushedFrom target_pos %~ M.insert start_pos (BoulderPushInfo (Just $ (wstate^.turn)+20))
+
+
+  moveTowardsPushers :: Level -> (Int, Int) -> M.Map (Int, Int) (S.Set (Int, Int)) -> m ()
+  moveTowardsPushers lvl start_pos pushing_candidates = do
+    passing <- getPassableFunction
+    path <- al' $ levelSearch
+                      start_pos
+                      (\(ex, ey) feat ->
+                          (ex, ey) `M.member` pushing_candidates &&
+                          (case feat of
+                             Just cell | Just f <- cell^.cellFeature
+                               -> passing f
+                             _ -> True) &&
+                          isPassableSquare lvl ex ey)
+                      lvl
+                      passing
+
+    -- Send command to move towards the target
+    case path of
+      [] -> empty
+      (p:_rest) -> do
+        logTrace "Moving towards boulder pushing." $
+          moveToDirection start_pos p
+
+
 findWayToFeatures :: (Alternative m, MonadWAI m)
                   => LevelFeature
                   -> (Direction -> (Int, Int) -> m a)
@@ -640,6 +739,21 @@ getWalkableNeighbours level (x, y) exceptions is_passable =
                 isWalkableTransition level (nx, ny) (x, y) exceptions is_passable ]
 {-# INLINE getWalkableNeighbours #-}
 
+-- Returns True if some square is walkable, not just in level features but also
+-- in the sense it doesn't have boulders or monsters.
+isPassableSquare :: Level -> Int -> Int -> Bool
+isPassableSquare lvl x y =
+  fromMaybe False $ do
+    cell <- lvl^?cells.ix (x, y)
+    guard (S.notMember (x, y) $ lvl^.boulders)
+    guard (not $ M.member (x, y) $ lvl^.monsters)
+    guard (fromMaybe False $ is_passable <$> (cell^.cellFeature))
+    return True
+ where
+  is_passable = if lvl^.numTurnsInSearchStrategy >= 500
+                  then isPassableIncludeTraps
+                  else isPassable
+
 isDesirableExplorationTarget :: Level -> Int -> Int -> Bool
 isDesirableExplorationTarget lvl x y =
 
@@ -648,7 +762,7 @@ isDesirableExplorationTarget lvl x y =
   --
   -- The black square should be clean otherwise or we can't see the level
   -- feature even if we go there.
-  (isPassableSquare x y && (any (\(nx, ny) -> isExplorableBlackSquare nx ny) (neighboursOf x y)))
+  (isPassableSquare lvl x y && (any (\(nx, ny) -> isExplorableBlackSquare nx ny) (neighboursOf x y)))
 
     ||
   -- Case 2. Item piles that we haven't explored
@@ -668,13 +782,6 @@ isDesirableExplorationTarget lvl x y =
       Just feat -> return $ is_passable feat
       _ -> return True
 
-  isPassableSquare x y = fromMaybe False $ do
-    cell <- lvl^?cells.ix (x, y)
-    guard (S.notMember (x, y) $ lvl^.boulders)
-    guard (not $ M.member (x, y) $ lvl^.monsters)
-    guard (fromMaybe False $ is_passable <$> (cell^.cellFeature))
-    return True
-
   isExplorableBlackSquare x y = fromMaybe False $ do
     cell <- lvl^?cells.ix (x, y)
     guard (S.notMember (x, y) $ lvl^.boulders)
@@ -682,8 +789,3 @@ isDesirableExplorationTarget lvl x y =
     guard (cell^.cellItems == NoPile)
     guard (cell^.cellFeature == Just InkyBlackness)
     return True
-
-neighboursOf :: Int -> Int -> [(Int, Int)]
-neighboursOf x y =
-  [(nx, ny) | nx <- [x-1..x+1], ny <- [y-1..y+1], nx /= x || ny /= y]
-

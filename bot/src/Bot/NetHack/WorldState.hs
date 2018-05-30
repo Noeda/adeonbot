@@ -82,7 +82,13 @@ module Bot.NetHack.WorldState
   , increaseFailedWalkCount
   , isSafeToPray
   , lastPhysicallySeen
-  , monsterObservedMoving )
+  , monsterObservedMoving
+
+  -- Boulder pushing
+  , boulderAtPushedFrom
+  , boulderPushes
+  , BoulderPushInfo(..)
+  , expireTurn )
   where
 
 import Bot.NetHack.Direction
@@ -131,6 +137,10 @@ data LevelMeta = LevelMeta
 data MonsterDeathImage = MonsterDeathImage !T.Text !Int
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
+newtype BoulderPushInfo = BoulderPushInfo
+  { _expireTurn :: Maybe Turn }
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+
 data Level = Level
   { _cells    :: !(A.Array (Int, Int) LevelCell)
   , _whereSearchedLastTime :: !(Maybe (Int, Int, Int))
@@ -143,7 +153,15 @@ data Level = Level
   -- place)
   , _failedWalks :: !(M.Map (Int, Int) (M.Map Direction (Turn, Int)))
   , _recentMonsterDeaths :: !(M.Map (Int, Int) [MonsterDeathImage])
-  , _monsters :: !(M.Map (Int, Int) MonsterImage) }
+  , _monsters :: !(M.Map (Int, Int) MonsterImage)
+
+  -- These are for boulder pushing
+  -- boulderPushes is a map from boulder location to a set of locations we
+  -- tried to push the boulder from.
+  --
+  -- Cleared whenever any features around the boulder change or the boulder
+  -- disappears.
+  , _boulderPushes :: !(M.Map (Int, Int) (M.Map (Int, Int) BoulderPushInfo)) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 instance ToJSON Level where
@@ -175,7 +193,8 @@ instance FromJSON Level where
       , _monsters = monsters
       , _recentMonsterDeaths = monster_deaths
       , _numTurnsInSearchStrategy = ntiss
-      , _failedWalks = failed_walks }
+      , _failedWalks = failed_walks
+      , _boulderPushes = M.empty }
 
   parseJSON _ = fail "FromJSON.Level: not an object"
 
@@ -328,6 +347,7 @@ makeLenses ''LevelCell
 makeLenses ''Item
 makeLenses ''WorldState
 makeLenses ''LevelMeta
+makeLenses ''BoulderPushInfo
 
 emptyWorldState :: WorldState
 emptyWorldState = WorldState
@@ -360,7 +380,8 @@ emptyLevel = Level
   , _monsters = M.empty
   , _recentMonsterDeaths = M.empty
   , _numTurnsInSearchStrategy = 0
-  , _failedWalks = M.empty }
+  , _failedWalks = M.empty
+  , _boulderPushes = M.empty }
 
 hasStatue :: Level -> (Int, Int) -> Bool
 hasStatue lvl pos = fromMaybe False (do
@@ -415,3 +436,11 @@ isSafeToPray wstate =
     Nothing -> wstate^.turn >= 400
     Just pray_turn -> pray_turn - (wstate^.turn) >= 800
 
+boulderAtPushedFrom :: (Int, Int) -> Lens' Level (M.Map (Int, Int) BoulderPushInfo)
+boulderAtPushedFrom coords = lens get_it set_it
+ where
+  get_it lvl = fromMaybe M.empty $ lvl^.boulderPushes.at coords
+  set_it lvl pushes | M.null pushes =
+    lvl & boulderPushes.at coords .~ Nothing
+  set_it lvl pushes =
+    lvl & boulderPushes.at coords .~ (Just pushes)

@@ -9,6 +9,7 @@ module Bot.NetHack.Direction
   , directionToByteString
   , diffToDir
   , diffToSend
+  , neighboursOf
   , movePosByDir )
   where
 
@@ -69,3 +70,6 @@ diffToSend :: (Int, Int) -> (Int, Int) -> Maybe B.ByteString
 diffToSend pos1 pos2 =
   directionToByteString <$> diffToDir pos1 pos2
 
+neighboursOf :: Int -> Int -> [(Int, Int)]
+neighboursOf x y =
+  [(nx, ny) | nx <- [x-1..x+1], ny <- [y-1..y+1], nx /= x || ny /= y]

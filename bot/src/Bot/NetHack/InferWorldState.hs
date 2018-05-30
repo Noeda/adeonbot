@@ -439,10 +439,12 @@ inferLevel lvl msgs = do
 
       new_monsters = inferMonsters current_turn statuses ss lvl (cx, cy) (lvl^.monsters)
 
-  let updated_lvl = lvl & (cells .~ new_cells) .
-                          (boulders .~ new_boulders) .
-                          (monsters .~ new_monsters) .
-                          (statues .~ new_statues)
+  let updated_lvl1 = lvl & (cells .~ new_cells) .
+                           (boulders .~ new_boulders) .
+                           (monsters .~ new_monsters) .
+                           (statues .~ new_statues)
+
+      updated_lvl = updateBoulderPushings lvl updated_lvl1 current_turn
 
   inferCurrentlyStandingSquare updated_lvl msgs
  where
@@ -547,6 +549,32 @@ inferLevel lvl msgs = do
             (old_cell & (cellFeature .~ Just new_feature) .
                         (cellItemAppearanceLastTime .~ "") .  -- Also clear item pile
                         (cellItems .~ NoPile))
+
+updateBoulderPushings :: Level -> Level -> Turn -> Level
+updateBoulderPushings old_lvl new_lvl current_turn = new_lvl & boulderPushes .~ new_boulderpushes
+ where
+  new_boulderpushes =
+    M.mapMaybeWithKey filtering (old_lvl^.boulderPushes)
+   where
+    filtering :: (Int, Int) -> M.Map (Int, Int) BoulderPushInfo -> Maybe (M.Map (Int, Int) BoulderPushInfo)
+    filtering boulder_pos pushed_locations =
+      -- When do we keep boulder push memory?
+      -- 1. When boulder hasn't changed appearance since last time
+      -- 2. None of the surrounding level cells have changed
+      -- 3. Expire time is not in the past for candidate locations
+      let new_pushed_locations = flip M.filter pushed_locations $ \info ->
+            fromMaybe True $ (info^.expireTurn) <&> \cturn -> cturn >= current_turn
+
+          test =
+            not (M.null new_pushed_locations) &&
+            boulder_pos `S.member` (new_lvl^.boulders) &&
+            all id (neighboursOf (boulder_pos^._1) (boulder_pos^._2) <&> \neighbour_pos ->
+              (new_lvl^?cells.ix neighbour_pos.cellFeature ==
+               old_lvl^?cells.ix neighbour_pos.cellFeature))
+
+       in if test
+            then Just new_pushed_locations
+            else Nothing
 
 levelSquares :: [(Int, Int)]
 levelSquares = [ (x, y) | x <- [0..79], y <- [1..21] ]
