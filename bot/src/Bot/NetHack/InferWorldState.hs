@@ -510,6 +510,7 @@ inferLevel lvl msgs = do
             "<" -> Just Upstairs
             "\\" | fcolor == BrightYellow -> Just Floor
             "{" | fcolor == Blue -> Just Fountain
+            "{" | fcolor == BrightBlue -> Just Fountain
             "}" | fcolor == Blue -> Just Water
             "}" | fcolor == Red -> Just Lava
             " " | can_infer_stuff_next_to_player -> Just Wall
