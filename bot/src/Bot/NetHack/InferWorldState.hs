@@ -457,9 +457,10 @@ inferLevel lvl msgs = do
                            (statues .~ new_statues) .
                            (badFastTravelSquares %~ expireBadFastTravelSquares current_turn)
 
-      updated_lvl = updateBoulderPushings lvl updated_lvl1 current_turn
+  updated_lvl2 <- inferCurrentlyStandingSquare updated_lvl1 msgs
 
-  inferCurrentlyStandingSquare updated_lvl msgs
+  let updated_lvl = updateBoulderPushings lvl updated_lvl2 current_turn
+  return updated_lvl
  where
   inferStatues ss old_statues = do
     -- This one removes statues from squares that don't look like statues anymore
