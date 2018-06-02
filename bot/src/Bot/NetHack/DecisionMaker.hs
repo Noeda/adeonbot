@@ -233,7 +233,10 @@ fastMoveToTarget (tx, ty) = do
   send $ "_" <> birdMovementKeysTo (cx1, cy1) (tx, ty) <> "."
   wstate2 <- askWorldState
   (_, cx2, cy2) <- currentScreen
-  when (wstate1^.turn == wstate2^.turn && cx1 == cx2 && cy1 == cy2) $
+  when (wstate1^.turn == wstate2^.turn && cx1 == cx2 && cy1 == cy2) $ do
+    modWorld $ (currentLevelT.badFastTravelSquares %~
+                  (M.insert (cx1, cy1) (wstate1^.turn + 500) .
+                   M.insert (tx, ty) (wstate1^.turn + 500)))
     empty
   when (cx1 == cx2 && cy1 == cy2) $
     -- We get here if we did _ movement, didn't move anywhere but the turn
