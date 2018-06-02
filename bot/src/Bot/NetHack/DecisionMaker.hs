@@ -57,13 +57,24 @@ decisionMaker = forever $
   pursue msg get_path = do
     path <- get_path
     (_, cx, cy) <- currentScreen
+
+    let basic_step p = case diffToDir (cx, cy) p of
+          Nothing -> empty
+          Just d -> logTrace (msg <> show (last path)) $
+            lift $ withAnswerer "Really attack"
+              ((modWorld (execState $ inferPeaceful p)) >> send "n")
+              (setLastDirectionMoved (Just d) >> moveToDirection' d)
+
     case path of
-      (p:_) -> case diffToDir (cx, cy) p of
-        Nothing -> empty
-        Just d -> logTrace (msg <> show (last path)) $
-          lift $ withAnswerer "Really attack"
-            ((modWorld (execState $ inferPeaceful p)) >> send "n")
-            (setLastDirectionMoved (Just d) >> moveToDirection' d)
+      -- Use _ moving, if the path is longer than one step.
+      p | length p > 1 ->
+        let tgt = last p
+        -- Use <|> to fall back to normal walking if fast travel fails for
+        -- whatever reason.
+         in fastMoveToTarget tgt <|> basic_step (head p)
+
+      -- If the target is right next to us, move using normal movement.
+      (p:_rest) -> basic_step p
       _ -> empty
 
 waitIfBlind :: (Alternative m, MonadWAI m) => m ()
@@ -208,6 +219,67 @@ pickUpSupplies = do
     (p:_rest) ->
       moveToDirection (cx, cy) p
 
+fastMoveToTarget :: (Alternative m, MonadWAI m) => (Int, Int) -> m ()
+fastMoveToTarget (tx, ty) = do
+  (_, cx1, cy1) <- currentScreen
+  wstate1 <- askWorldState
+
+  -- Don't fast travel here if the squares have been marked bad for fast
+  -- travelling.
+  when ((not $ null $ (wstate1^..currentLevelT.badFastTravelSquares.ix (tx, ty) :: [Turn])) ||
+        (not $ null $ (wstate1^..currentLevelT.badFastTravelSquares.ix (cx1, cy1) :: [Turn]))) $
+    empty
+
+  send $ "_" <> birdMovementKeysTo (cx1, cy1) (tx, ty) <> "."
+  wstate2 <- askWorldState
+  (_, cx2, cy2) <- currentScreen
+  when (wstate1^.turn == wstate2^.turn && cx1 == cx2 && cy1 == cy2) $
+    empty
+  when (cx1 == cx2 && cy1 == cy2) $
+    -- We get here if we did _ movement, didn't move anywhere but the turn
+    -- count increased. Something probably went wrong (NetHack walked into a
+    -- wall). We mark this square and target square as bad for fast moving for
+    -- N turns if this happens.
+    modWorld $ (currentLevelT.badFastTravelSquares %~
+                  (M.insert (cx1, cy1) (wstate1^.turn + 500) .
+                   M.insert (tx, ty) (wstate1^.turn + 500)))
+
+  -- Did we travel to a square that's 1) not the target square 2) a bad square
+  -- In that case, mark everything involved a bad square.
+  when ((not $ null $ (wstate2^..currentLevelT.badFastTravelSquares.ix (cx2, cy2) :: [Turn])) &&
+        (cx2 /= tx || cy2 /= ty) &&
+        (cx2 /= cx1 || cy2 /= cy1)) $
+    modWorld $ (currentLevelT.badFastTravelSquares %~
+                  (M.insert (cx1, cy1) (wstate1^.turn + 500) .
+                   M.insert (cx2, cy2) (wstate1^.turn + 500) .
+                   M.insert (tx, ty) (wstate1^.turn + 500)))
+
+moveToPathOrDirection' :: (Alternative m, MonadWAI m)
+                       => Direction
+                       -> (Int, Int)
+                       -> m ()
+moveToPathOrDirection' dir tgt@(tx, ty) = do
+  (_, cx, cy) <- currentScreen
+  if | cx == tx && cy == ty -> return ()
+     | abs (cx-tx) <= 1 && abs (cx-ty) <= 1 ->
+         moveToDirection' dir
+     | otherwise ->
+         fastMoveToTarget tgt <|> moveToDirection' dir
+
+moveToPathOrDirection :: (Alternative m, MonadWAI m)
+                      => (Int, Int)
+                      -> [(Int, Int)]
+                      -> m ()
+moveToPathOrDirection _ [] = empty
+moveToPathOrDirection src [tgt] | src == tgt = return ()
+moveToPathOrDirection src path =
+  case diffToDir src (last path) of
+    Just dir -> moveToDirection' dir
+    Nothing ->
+      fastMoveToTarget (last path) <|> case diffToDir src (head path) of
+        Nothing -> empty
+        Just dir -> moveToDirection' dir
+
 moveToDirection' :: MonadWAI m => Direction -> m ()
 moveToDirection' dir = do
   (_, cx1, cy1) <- currentScreen
@@ -328,7 +400,7 @@ searchAround = do
                                   is_passable
 
         case path of
-          (p:_) -> moveToDirection (cx, cy) p
+          p | length p >= 1 -> moveToPathOrDirection (cx, cy) p
           _ -> empty
 
   searchableFolder :: M.Map (Int, Int) Int -> Level -> (Int, Int) -> Maybe ((Int, Int), Int) -> (Int, Int) -> Maybe ((Int, Int), Int)
@@ -511,7 +583,7 @@ findDownstairs' is_passable = do
     then send ">"
     else findWayToFeatures Downstairs
            (\d _ -> moveToDirection' d)
-           (\d _ -> moveToDirection' d)
+           (\d _ tgt -> moveToPathOrDirection' d tgt)
            is_passable
 
 findClosedDoors :: (Alternative m, MonadWAI m)
@@ -531,7 +603,7 @@ findClosedDoors = do
           modWorld $ execState $ inferSquare pos (\old_feature -> if old_feature == ClosedDoor
                                                     then LockedDoor
                                                     else old_feature))
-    (\d pos -> logTrace ("Moving towards closed door at. " <> show pos) $ moveToDirection' d)
+    (\d pos tgt -> logTrace ("Moving towards closed door at. " <> show pos) $ moveToPathOrDirection' d tgt)
     is_passable
 
 findLockedDoors :: (Alternative m, MonadWAI m) => m ()
@@ -548,7 +620,7 @@ findLockedDoors = do
         when (any (T.isInfixOf "is in no shape for kicking") msgs) $ do
           modWorld $ execState $ inferSoreLegs 40
           empty)
-    (\d _pos -> logTrace ("Moving towards locked door at " <> show d) $ moveToDirection' d)
+    (\d pos tgt -> logTrace ("Moving towards locked door at " <> show pos) $ moveToPathOrDirection' d tgt)
     is_passable
 
 pushBoulders :: forall m. (Alternative m, MonadWAI m) => m ()
@@ -643,15 +715,15 @@ pushBoulders = do
     -- Send command to move towards the target
     case path of
       [] -> empty
-      (p:_rest) -> do
+      p -> do
         logTrace "Moving towards boulder pushing." $
-          moveToDirection start_pos p
+          moveToPathOrDirection start_pos p
 
 
 findWayToFeatures :: (Alternative m, MonadWAI m)
                   => LevelFeature
                   -> (Direction -> (Int, Int) -> m a)
-                  -> (Direction -> (Int, Int) -> m a)
+                  -> (Direction -> (Int, Int) -> (Int, Int) -> m a)
                   -> (LevelFeature -> Bool)
                   -> m a
 findWayToFeatures feature is_next towards_this_way is_passable = do
@@ -673,9 +745,9 @@ findWayToFeatures feature is_next towards_this_way is_passable = do
     [next_to_me] -> do
       d <- al' $ diffToDir (cx, cy) next_to_me
       is_next d next_to_me
-    (p:_rest) -> do
+    (p:rest) -> do
       d <- al' $ diffToDir (cx, cy) p
-      towards_this_way d p
+      towards_this_way d p (last $ p:rest)
     _ -> empty
 
 findMonsterKill :: (Alternative m, MonadWAI m) => m [(Int, Int)]

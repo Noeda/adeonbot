@@ -454,7 +454,8 @@ inferLevel lvl msgs = do
   let updated_lvl1 = lvl & (cells .~ new_cells) .
                            (boulders .~ new_boulders) .
                            (monsters .~ new_monsters) .
-                           (statues .~ new_statues)
+                           (statues .~ new_statues) .
+                           (badFastTravelSquares %~ expireBadFastTravelSquares current_turn)
 
       updated_lvl = updateBoulderPushings lvl updated_lvl1 current_turn
 
@@ -562,6 +563,9 @@ inferLevel lvl msgs = do
             (old_cell & (cellFeature .~ Just new_feature) .
                         (cellItemAppearanceLastTime .~ "") .  -- Also clear item pile
                         (cellItems .~ NoPile))
+
+expireBadFastTravelSquares :: Turn -> M.Map k Turn -> M.Map k Turn
+expireBadFastTravelSquares current_turn = M.filter (\turn -> turn >= current_turn)
 
 updateBoulderPushings :: Level -> Level -> Turn -> Level
 updateBoulderPushings old_lvl new_lvl current_turn = new_lvl & boulderPushes .~ new_boulderpushes

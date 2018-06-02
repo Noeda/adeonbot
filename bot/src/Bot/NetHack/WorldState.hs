@@ -91,7 +91,10 @@ module Bot.NetHack.WorldState
   , expireTurn
 
   -- Dirty squares
-  , squareDirty )
+  , squareDirty
+
+  -- Bad fast travel squares
+  , badFastTravelSquares )
   where
 
 import Bot.NetHack.Direction
@@ -171,7 +174,12 @@ data Level = Level
   -- look up items on a square but sometimes it needs to be told to do that.
   -- This set contains squares that should be checked with : key before we
   -- trust our information is up to date on that square.
-  , _dirtiedSquares :: !(S.Set (Int, Int)) }
+  , _dirtiedSquares :: !(S.Set (Int, Int))
+
+  -- Bad fast travel squares.
+  -- Don't attempt fast travel to/from any squares on this map, at least until
+  -- the turn in the map.
+  , _badFastTravelSquares :: !(M.Map (Int, Int) Turn) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 instance ToJSON Level where
@@ -205,7 +213,8 @@ instance FromJSON Level where
       , _numTurnsInSearchStrategy = ntiss
       , _failedWalks = failed_walks
       , _boulderPushes = M.empty
-      , _dirtiedSquares = S.empty }
+      , _dirtiedSquares = S.empty
+      , _badFastTravelSquares = M.empty }
 
   parseJSON _ = fail "FromJSON.Level: not an object"
 
@@ -394,7 +403,8 @@ emptyLevel = Level
   , _numTurnsInSearchStrategy = 0
   , _failedWalks = M.empty
   , _boulderPushes = M.empty
-  , _dirtiedSquares = S.empty }
+  , _dirtiedSquares = S.empty
+  , _badFastTravelSquares = M.empty }
 
 hasStatue :: Level -> (Int, Int) -> Bool
 hasStatue lvl pos = fromMaybe False (do
