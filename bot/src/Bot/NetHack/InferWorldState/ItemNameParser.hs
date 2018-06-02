@@ -123,6 +123,9 @@ nameToItem (T.strip -> txt'') = Item
 
     "tooled horn" -> ScaryTonalInstrument
 
+    "boulder" -> Boulder
+    "boulders" -> Boulder
+
     _ -> StrangeItem
 
   txt_article_removed = if isPrefixOf "a " txt'

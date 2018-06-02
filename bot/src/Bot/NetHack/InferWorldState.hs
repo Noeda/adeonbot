@@ -276,13 +276,21 @@ inferCurrentlyStandingSquare lvl msgs = do
   -- exactly.
   -- 3) We get a message that suggests something is on the floor
   let lcell = lvl^?cells.ix (cx, cy)
-  if (isNothing $ join $ lcell^?_Just.cellFeature) ||
+  new_level <- if (isNothing $ join $ lcell^?_Just.cellFeature) ||
      (lcell^?_Just.cellItems == Just PileSeen) ||
      (any (T.isInfixOf "You see here") msgs) ||
      (any (T.isInfixOf "You feel here") msgs)
     then do new_lvl <- checkFloor cx cy
             return $ new_lvl & statues %~ S.delete (cx, cy) -- Rely on item pile statue, not the off-the-line statue info
     else return lvl
+
+  -- Before we return, check if there's now a boulder (as an Item) on the
+  -- square. If there is, mark it in the 'boulder' set on the level (separate
+  -- from item tracking). We'll need this to properly track boulders in some
+  -- logic.
+  return $ if Boulder `elem` (new_level^..cells.ix (cx, cy).cellItems.itemPile.each.itemIdentity)
+    then new_level & boulders %~ S.insert (cx, cy)
+    else new_level
  where
   skipEngravings = do
     thing <- matchf (limitRows [0] $ regex "You read:|Something is written|Something is engraved")

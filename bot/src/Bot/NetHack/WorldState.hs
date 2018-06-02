@@ -322,6 +322,7 @@ data ItemIdentity
   | NonTonalInstrument    -- drums
   | ScaryTonalInstrument  -- tooled horn
   | Statue
+  | Boulder
   | StrangeItem    -- No idea what this item is.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
