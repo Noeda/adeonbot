@@ -35,18 +35,7 @@ import Terminal.Screen
 import Text.Regex.TDFA hiding ( empty )
 
 decisionMaker :: Monad m => WAI m ()
-decisionMaker = forever $ do
-  let pursue msg f = do path <- f
-                        (_, cx, cy) <- currentScreen
-                        case path of
-                          (p:_) -> case diffToDir (cx, cy) p of
-                            Nothing -> empty
-                            Just d -> logTrace (msg <> show (last path)) $
-                              lift $ withAnswerer "Really attack"
-                                ((modWorld (execState $ inferPeaceful p)) >> send "n")
-                                (setLastDirectionMoved (Just d) >> moveToDirection' d)
-                          _ -> empty
-
+decisionMaker = forever $
   withAnswerer "Call a"
     (send "\n") $
     runAbortAI_ (dywypi <|>
@@ -64,6 +53,18 @@ decisionMaker = forever $ do
                  pushBoulders <|>
                  searchAround <|>
                  logError "nothing to do")
+ where
+  pursue msg get_path = do
+    path <- get_path
+    (_, cx, cy) <- currentScreen
+    case path of
+      (p:_) -> case diffToDir (cx, cy) p of
+        Nothing -> empty
+        Just d -> logTrace (msg <> show (last path)) $
+          lift $ withAnswerer "Really attack"
+            ((modWorld (execState $ inferPeaceful p)) >> send "n")
+            (setLastDirectionMoved (Just d) >> moveToDirection' d)
+      _ -> empty
 
 waitIfBlind :: (Alternative m, MonadWAI m) => m ()
 waitIfBlind = do
@@ -154,7 +155,7 @@ eatCorpses = do
     logTrace ("Cannot eat corpses at " <> show (cx, cy) <> " because there is no guarantee they are fresh.") empty
 
   -- Time to eat
-  tryEating (\x -> if isEdible x then logTrace ("Will attempt to eat corpse '" <> T.unpack x <> "'") EatCorpse else DontEatCorpse) False
+  tryEating (\x -> if isEdible x then logTrace ("Will attempt to eat corpse '" <> T.unpack x <> "'") EatCorpse else DontEatCorpse) (const EatItem) False
 
 pickUpSupplies :: (Alternative m, MonadWAI m) => m ()
 pickUpSupplies = do
@@ -392,12 +393,17 @@ eatIfHungry = do
       Weak `S.member` (wstate^.statuses) ||
       Fainting `S.member` (wstate^.statuses))
      && hasFoodInInventory wstate
-    then tryEating (const DontEatCorpse) True
+    then tryEating (const DontEatCorpse) (const EatItem) True
     else empty
 
 data EatCorpseDecision
   = EatCorpse
   | DontEatCorpse
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
+data EatFoodDecision
+  = EatItem
+  | DontEatItem
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
 
 -- | This function sends "e" and will try to eat according to instructions
@@ -406,14 +412,18 @@ data EatCorpseDecision
 -- First function should inform if any corpses should be eaten and it'll be
 -- tested on each corpse.
 --
--- If second Bool is true, will try eat edible item from inventory.
+-- The second function should inform if any other food should be eaten off
+-- floor.
+--
+-- If third Bool is true, will try eat edible item from inventory.
 --
 -- If there are no food items to consume, invokes `empty`.
 tryEating :: (Alternative m, MonadWAI m)
           => (T.Text -> EatCorpseDecision)
+          -> (Item -> EatFoodDecision)
           -> Bool
           -> m ()
-tryEating corpse_eating_check eat_normal_food = do
+tryEating corpse_eating_check floor_eating_check eat_normal_food = do
   (_, cx, cy) <- currentScreen
   sendRaw "e"
 
@@ -429,6 +439,18 @@ tryEating corpse_eating_check eat_normal_food = do
                   send "y"
           else do sendRaw "n"
                   exhaustCorpseEating cx cy
+      _ -> exhaustFloorEating cx cy
+
+  exhaustFloorEating cx cy = do
+    line <- getScreenLine 0
+
+    case T.unpack line =~ ("There (is (a|an)|are) (.+) here; eat (it|one)\\?" :: String) :: [[String]] of
+      [[_whole, _isare, _aan, (T.pack -> foodname), _itone]] ->
+        if (nameToItem foodname)^.itemIdentity == Food && floor_eating_check (nameToItem foodname) == EatItem
+          then do modWorld $ itemPileImageAt (cx, cy) .~ PileSeen
+                  send "y"
+          else do sendRaw "n"
+                  exhaustFloorEating cx cy
       _ -> nextStep
 
   nextStep = do
