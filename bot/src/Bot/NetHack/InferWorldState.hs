@@ -54,11 +54,18 @@ inferWorldState messages = execStateT $ do
   inferPraying messages
   inferCurrentLevel messages
   inferRecentDeaths messages
+  inferEnhancableSkills messages
 
   wturn <- use turn
   currentLevelT %= cleanRecentMonsterDeaths wturn
 
   lastDirectionMoved .= Nothing
+
+inferEnhancableSkills :: MonadState WorldState m => [T.Text] -> m ()
+inferEnhancableSkills msgs
+  | any (T.isInfixOf "You feel more confident in your weapon skills.") msgs =
+      dirtyEnhancableSkills .= True
+  | otherwise = return ()
 
 inferHitpoints :: (MonadAI m, MonadState WorldState m) => m ()
 inferHitpoints =

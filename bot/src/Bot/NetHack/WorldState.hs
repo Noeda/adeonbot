@@ -94,7 +94,10 @@ module Bot.NetHack.WorldState
   , squareDirty
 
   -- Bad fast travel squares
-  , badFastTravelSquares )
+  , badFastTravelSquares
+
+  -- Skill enhancing
+  , dirtyEnhancableSkills )
   where
 
 import Bot.NetHack.Direction
@@ -132,7 +135,11 @@ data WorldState = WorldState
   , _hp                 :: !Hitpoints
   , _maxHP              :: !Hitpoints
   , _lastPrayed         :: !(Maybe Turn)
-  , _turn               :: !Turn }
+  , _turn               :: !Turn
+
+  -- Skill enhancing
+  , _dirtyEnhancableSkills :: !Bool   -- True if we saw a message that implies we could enhance some skill
+  }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data LevelMeta = LevelMeta
@@ -383,7 +390,8 @@ emptyWorldState = WorldState
   , _inventory = []
   , _inventoryDirty = True
   , _turn = 1
-  , _lastPrayed = Nothing }
+  , _lastPrayed = Nothing
+  , _dirtyEnhancableSkills = False }
 
 emptyLevelCell :: LevelCell
 emptyLevelCell = LevelCell

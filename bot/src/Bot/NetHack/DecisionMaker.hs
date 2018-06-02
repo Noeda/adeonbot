@@ -18,6 +18,7 @@ import Bot.NetHack.InferWorldState
 import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
 import Bot.NetHack.SelectItem
+import Bot.NetHack.ScreenPattern
 import Bot.NetHack.WorldState
 import Control.Lens hiding ( Level, levels )
 import Control.Monad
@@ -39,6 +40,7 @@ decisionMaker = forever $
   withAnswerer "Call a"
     (send "\n") $
     runAbortAI_ (dywypi <|>
+                 enhanceSkillsIfEnhancable <|>
                  prayIfInTrouble <|>
                  eatIfHungry <|>
                  pursue "Going towards monster at " findMonsterKill <|>
@@ -90,6 +92,27 @@ waitIfBlind = do
 
 setLastDirectionMoved :: MonadWAI m => Maybe Direction -> m ()
 setLastDirectionMoved dir = modWorld $ lastDirectionMoved .~ dir
+
+enhanceSkillsIfEnhancable :: (Alternative m, MonadWAI m) => m ()
+enhanceSkillsIfEnhancable = do
+  wstate <- askWorldState
+  if wstate^.dirtyEnhancableSkills
+    then do modWorld $ dirtyEnhancableSkills .~ False
+            doEnhancing
+    else empty
+ where
+  doEnhancing = do
+    -- Simply select whatever is at skill slot "a", if there is one.
+    -- In this sence, enhancing is dumb; the bot doesn't do anything special.
+    matched <- matchf " a -  "
+    if matched
+      then sendRaw "a"
+      else do pages <- matchf (regex "\\([0-9]+ of [0-9]+\\)")
+              end <- matchf "(end) "
+              if pages || end
+                then do sendRaw " "   -- Move on to next page
+                        doEnhancing
+                else empty
 
 prayIfInTrouble :: (Alternative m, MonadWAI m) => m ()
 prayIfInTrouble = do
