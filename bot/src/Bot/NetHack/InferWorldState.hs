@@ -512,6 +512,7 @@ inferLevel lvl msgs = do
             "#" | fcolor == Yellow -> Just Wall
             "#" -> Just Floor
             "7" | fcolor == LightGray -> Just Floor
+            "7" | fcolor == White -> Just Floor
             "7" | fcolor == Yellow && old_cell^.cellFeature /= Just LockedDoor
                   -> Just ClosedDoor
             "-" | fcolor == Yellow -> Just OpenedDoor
