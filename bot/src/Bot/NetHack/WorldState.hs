@@ -88,7 +88,10 @@ module Bot.NetHack.WorldState
   , boulderAtPushedFrom
   , boulderPushes
   , BoulderPushInfo(..)
-  , expireTurn )
+  , expireTurn
+
+  -- Dirty squares
+  , squareDirty )
   where
 
 import Bot.NetHack.Direction
@@ -161,7 +164,14 @@ data Level = Level
   --
   -- Cleared whenever any features around the boulder change or the boulder
   -- disappears.
-  , _boulderPushes :: !(M.Map (Int, Int) (M.Map (Int, Int) BoulderPushInfo)) }
+  , _boulderPushes :: !(M.Map (Int, Int) (M.Map (Int, Int) BoulderPushInfo))
+
+  -- Dirtied squares.
+  -- Most of the time, the world state inferer can figure out by itself when to
+  -- look up items on a square but sometimes it needs to be told to do that.
+  -- This set contains squares that should be checked with : key before we
+  -- trust our information is up to date on that square.
+  , _dirtiedSquares :: !(S.Set (Int, Int)) }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 instance ToJSON Level where
@@ -194,7 +204,8 @@ instance FromJSON Level where
       , _recentMonsterDeaths = monster_deaths
       , _numTurnsInSearchStrategy = ntiss
       , _failedWalks = failed_walks
-      , _boulderPushes = M.empty }
+      , _boulderPushes = M.empty
+      , _dirtiedSquares = S.empty }
 
   parseJSON _ = fail "FromJSON.Level: not an object"
 
@@ -382,7 +393,8 @@ emptyLevel = Level
   , _recentMonsterDeaths = M.empty
   , _numTurnsInSearchStrategy = 0
   , _failedWalks = M.empty
-  , _boulderPushes = M.empty }
+  , _boulderPushes = M.empty
+  , _dirtiedSquares = S.empty }
 
 hasStatue :: Level -> (Int, Int) -> Bool
 hasStatue lvl pos = fromMaybe False (do
@@ -445,3 +457,10 @@ boulderAtPushedFrom coords = lens get_it set_it
     lvl & boulderPushes.at coords .~ Nothing
   set_it lvl pushes =
     lvl & boulderPushes.at coords .~ (Just pushes)
+
+squareDirty :: (Int, Int) -> Lens' Level Bool
+squareDirty coords = lens get_it set_it
+ where
+  get_it lvl = S.member coords (lvl^.dirtiedSquares)
+  set_it lvl False = lvl & dirtiedSquares %~ S.delete coords
+  set_it lvl True = lvl & dirtiedSquares %~ S.insert coords

@@ -275,13 +275,17 @@ inferCurrentlyStandingSquare lvl msgs = do
   -- 2) There are items on the floor but we haven't checked which items
   -- exactly.
   -- 3) We get a message that suggests something is on the floor
+  -- 4) Something has manually set dirty square flag to signal that we should
+  -- check the flooor.
   let lcell = lvl^?cells.ix (cx, cy)
   new_level <- if (isNothing $ join $ lcell^?_Just.cellFeature) ||
      (lcell^?_Just.cellItems == Just PileSeen) ||
+     (lvl^.squareDirty (cx, cy)) ||
      (any (T.isInfixOf "You see here") msgs) ||
      (any (T.isInfixOf "You feel here") msgs)
     then do new_lvl <- checkFloor cx cy
-            return $ new_lvl & statues %~ S.delete (cx, cy) -- Rely on item pile statue, not the off-the-line statue info
+            return $ new_lvl & (squareDirty (cx, cy) .~ False) .
+                               (statues %~ S.delete (cx, cy)) -- Rely on item pile statue, not the off-the-line statue info
     else return lvl
 
   -- Before we return, check if there's now a boulder (as an Item) on the

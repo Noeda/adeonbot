@@ -200,7 +200,9 @@ pickUpSupplies = do
                      logTrace ("Picking up food item (" <> show counter <> " -> " <> show (counter+1) <> ")")
                               (1, counter+1)
                    _ -> (0, counter)) num_food_items
-                 modWorld $ execState dirtyInventory
+                 modWorld $ \w -> w &
+                   (levels.ix (w^.currentLevel) %~ squareDirty (cx, cy) .~ True) .
+                   execState dirtyInventory
                  yield
     (p:_rest) ->
       moveToDirection (cx, cy) p
