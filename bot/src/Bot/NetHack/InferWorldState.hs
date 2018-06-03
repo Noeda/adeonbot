@@ -329,6 +329,7 @@ inferRecentDeaths messages = do
             cl <- use currentLevel
             levels.at cl._Just.recentMonsterDeaths.at tgt_pos %= \deaths ->
               Just (fromMaybe [] deaths <> [MonsterDeathImage target curturn])
+            levels.at cl._Just.squareDirty tgt_pos .= True
         _ -> return ()
  where
   killRegex = "You (kill|destroy) (.+)!" :: String
@@ -366,7 +367,7 @@ inferCurrentlyStandingSquare lvl msgs = do
   -- exactly.
   -- 3) We get a message that suggests something is on the floor
   -- 4) Something has manually set dirty square flag to signal that we should
-  -- check the flooor.
+  -- check the floor.
   let lcell = lvl^?cells.ix (cx, cy)
   new_level <- if (isNothing $ join $ lcell^?_Just.cellFeature) ||
      (lcell^?_Just.cellItems == Just PileSeen) ||

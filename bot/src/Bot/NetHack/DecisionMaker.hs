@@ -24,6 +24,7 @@ import Bot.NetHack.WorldState
 import Control.Lens hiding ( Level, levels )
 import Control.Monad
 import Control.Monad.State.Strict
+import Control.Monad.Trans.Except
 import Data.Data
 import Data.Foldable
 import qualified Data.IntMap.Strict as IM
@@ -236,10 +237,30 @@ eatCorpses = do
   -- Eat corpses if not satiated and they are safe and we track that the corpse
   -- should not be too old.
   wstate <- askWorldState
+  lvl <- getCurrentLevel wstate
 
   -- Satiated check
   guard (Satiated `S.notMember` (wstate^.statuses))
 
+  -- Any recently died monsters in vicinity? If yes and the square also
+  -- contains a dirty item pile, go check it out.
+  result <- runExceptT $ ifor_ (lvl^.recentMonsterDeaths) $ \(mx, my) _ ->
+    when (lvl^?cells.ix (mx, my).cellItems == (Just PileSeen)) $ do
+      lift (Just <$> (moveTowardsSquare (mx, my)) <|> pure Nothing) >>= \case
+        Just NotYetAtDestination -> logTrace ("Moving towards monster that died at " <> show (mx, my)) $ throwE $ return ()
+        Just AlreadyAtDestination -> throwE $ do
+          r <- eatCorpsesOnCurrentSquare
+          modWorld (currentLevelT.recentMonsterDeaths.at (mx, my) .~ Nothing)
+          return r
+        Nothing -> return ()
+
+  case result of
+    Left next -> next
+    Right () -> eatCorpsesOnCurrentSquare
+
+eatCorpsesOnCurrentSquare :: (Alternative m, MonadWAI m) => m ()
+eatCorpsesOnCurrentSquare = do
+  wstate <- askWorldState
   (_, cx, cy) <- currentScreen
 
   -- Are there corpses on the current square?
@@ -248,7 +269,8 @@ eatCorpses = do
   -- If there are no edibles, abort here
   -- The eating function below also checks edibles but if we don't check then
   -- we would be trying to eat every single turn...
-  when (null edibles) empty
+  when (null edibles) $
+    empty
 
   let current_turn = wstate^.turn
 
@@ -262,6 +284,23 @@ eatCorpses = do
 
   -- Time to eat
   tryEating (\x -> if isEdible x then logTrace ("Will attempt to eat corpse '" <> T.unpack x <> "'") EatCorpse else DontEatCorpse) (const EatItem) False
+
+data AlreadyAtDestination = AlreadyAtDestination | NotYetAtDestination
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
+moveTowardsSquare :: (Alternative m, MonadWAI m) => (Int, Int) -> m AlreadyAtDestination
+moveTowardsSquare (tx, ty) = do
+  wstate <- askWorldState
+  lvl <- getCurrentLevel wstate
+  is_passable <- getPassableFunction
+  (_, cx, cy) <- currentScreen
+  path <- al' $ levelSearch (cx, cy)
+                            (\goal _ -> goal == (tx, ty))
+                            lvl
+                            is_passable
+  case path of
+    [] -> return AlreadyAtDestination
+    path -> moveToPathOrDirection (cx, cy) path >> pure NotYetAtDestination
 
 pickUpSupplies :: (Alternative m, MonadWAI m) => m ()
 pickUpSupplies = do
