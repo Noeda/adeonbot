@@ -173,6 +173,7 @@ enhanceSkillsIfEnhancable = do
     else empty
  where
   doEnhancing = do
+    sendRaw "#enhance\n"
     -- Simply select whatever is at skill slot "a", if there is one.
     -- In this sence, enhancing is dumb; the bot doesn't do anything special.
     matched <- matchf " a -  "
