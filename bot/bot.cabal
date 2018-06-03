@@ -22,6 +22,7 @@ library
                        Bot.NetHack.Logs
                        Bot.NetHack.Messages
                        Bot.NetHack.MonadAI
+                       Bot.NetHack.Search
                        Bot.NetHack.SelectItem
                        Bot.NetHack.ScreenPattern
                        Bot.NetHack.Synchronizer

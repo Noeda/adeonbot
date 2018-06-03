@@ -1,3 +1,4 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -41,7 +42,7 @@ import Data.Monoid
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Traversable ( for )
-import Text.Regex.TDFA
+import Text.Regex.TDFA hiding ( match )
 import Terminal.Screen
 
 -- | Uses what is currently seen on the screen to infer and update bot's world
@@ -51,6 +52,8 @@ inferWorldState messages = execStateT $ do
   inferTurnCount
   inferHitpoints
   inferStatuses
+  inferAlignment
+  inferExperienceLevel
   inferPraying messages
   inferCurrentLevel messages
   inferRecentDeaths messages
@@ -60,6 +63,10 @@ inferWorldState messages = execStateT $ do
   currentLevelT %= cleanRecentMonsterDeaths wturn
 
   lastDirectionMoved .= Nothing
+
+  (_, cx, cy) <- currentScreen
+  lvl_idx <- use currentLevel
+  previousLocation .= Just (lvl_idx, (cx, cy))
 
 inferEnhancableSkills :: MonadState WorldState m => [T.Text] -> m ()
 inferEnhancableSkills msgs
@@ -82,8 +89,9 @@ inferTurnCount =
       logTrace ("Turn is " <> show turncount) $ turn .= turncount
     x -> logTrace ("Couldn't read turn count " <> show x) $ return ()
 
-inferLevelIndex :: MonadAI m => StateT WorldState m ()
-inferLevelIndex = do
+inferLevelIndex :: MonadAI m => [T.Text] -> StateT WorldState m ()
+inferLevelIndex messages = do
+  (_ , cx, cy) <- currentScreen
   cl <- use currentLevel
   expected_description <- use (levelMeta.at cl._Just.levelDescription)
 
@@ -94,7 +102,31 @@ inferLevelIndex = do
     then return ()
     else do send "#overview\n"
             lookForYouAreHere lvl_description
+            linkConnectivity cx cy
  where
+  linkConnectivity cx cy = do
+    new_index <- use currentLevel
+    -- Did the level change?
+    use previousLocation >>= \case
+      Just (lvl_index, (prev_x, prev_y)) | lvl_index /= new_index -> do
+        -- If we have a record of using stairs, then mark a link to those
+        -- stairs we used. BUT NOT IF MYSTERIOUS FORCE WAS OBSERVED
+        use usedStairs >>= \case
+          Just (lvl_index, (stairs_x, stairs_y), stairfeature) |
+            lvl_index /= new_index &&
+            not (any ("A mysterious force momentarily" `T.isInfixOf`) messages) ->
+              logTrace ("Marking stairs connectivity: " <> show (lvl_index, stairs_x, stairs_y) <> " -> " <> show (new_index, cx, cy)) $
+                levels.at lvl_index._Just %= addConnection (stairs_x, stairs_y) (new_index, (cx, cy)) [stairfeature] Confirmed
+          _ -> return ()
+
+        usedStairs .= Nothing
+
+        -- Magic portal to quest, or fort knox
+        when (any ("You activated a magic portal!" `T.isInfixOf`) messages) $
+          levels.at lvl_index._Just %= addConnection (prev_x, prev_y) (new_index, (cx, cy)) [MagicPortal] Fuzzy
+
+      _ -> usedStairs .= Nothing
+
   lookForYouAreHere lvl_description = do
     -- Use the --More-- prompt to figure the column where branches are
     -- listed.
@@ -106,7 +138,7 @@ inferLevelIndex = do
 
         branchFolder branchmap row = do line <- getScreenLine' row branch_column
                                         return $ if T.head line /= ' '
-                                          then M.insert row (T.strip line) branchmap
+                                          then M.insert row (stripLevelRange $ T.strip line) branchmap
                                           else branchmap
 
     -- We don't actually look at the level names at all. Just branch
@@ -140,7 +172,8 @@ inferLevelIndex = do
                                   in largest_key+1
 
           levelMeta.at new_index .= Just (LevelMeta { _levelDescription = lvl_description
-                                                    , _branchName = branchname })
+                                                    , _branchName = branchname
+                                                    , _levelNumber = lvlDescriptionToLvlNumber lvl_description })
           levels.at new_index .= Just emptyLevel
           currentLevel .= new_index
 
@@ -152,6 +185,23 @@ inferLevelIndex = do
     when b $ do
       send " "
       dismissMores
+
+  -- This function strips away extra stuff at the end of branch name.
+  -- "The Dungeons of Doom: levels 1 to 2" -> "The Dungeons of Doom"
+  stripLevelRange txt =
+    if ":" `T.isInfixOf` txt
+      then fst $ T.breakOn ":" txt
+      else txt
+
+  lvlDescriptionToLvlNumber :: T.Text -> Int
+  lvlDescriptionToLvlNumber "End Game" = -1
+  lvlDescriptionToLvlNumber "Fort Ludios" = -1
+  lvlDescriptionToLvlNumber txt =
+    if | "Dlvl:" `T.isPrefixOf` txt
+         -> read $ T.unpack $ T.drop 5 txt
+       | "Home " `T.isPrefixOf` txt
+         -> read $ T.unpack $ T.drop 5 txt
+       | otherwise -> error $ "Cannot interpret \"" <> T.unpack txt <> "\" to get level number out of it."
 
 inferStatuses :: MonadAI m => StateT WorldState m ()
 inferStatuses = do
@@ -169,6 +219,23 @@ inferStatuses = do
         "Fainting" -> statuses %= S.insert Fainting
         "Satiated" -> statuses %= S.insert Satiated
         _ -> return ()
+    _ -> return ()
+
+inferAlignment :: MonadAI m => StateT WorldState m ()
+inferAlignment = do
+  matchf (limitRows [22] $ regex ("(Lawful|Neutral|Chaotic)" :: T.Text)) >>= \case
+    [_whole, align] -> case align of
+      ("Lawful" :: T.Text) -> alignment .= Lawful
+      "Neutral" -> alignment .= Neutral
+      "Chaotic" -> alignment .= Chaotic
+      _ -> return ()
+    _ -> return ()
+
+inferExperienceLevel :: MonadAI m => StateT WorldState m ()
+inferExperienceLevel = do
+  matchf (limitRows [23] $ regex ("Xp:([0-9]+)" :: T.Text)) >>= \case
+    [_whole, exp_level] ->
+      experienceLevel .= (read exp_level)
     _ -> return ()
 
 inferPraying :: (MonadAI m, MonadState WorldState m) => [T.Text] -> m ()
@@ -197,7 +264,11 @@ inferInventory messages = do
         msgcheck "turn into" ||
         msgcheck "attracted to" ||
         msgcheck "stands still while" ||
+        msgcheck "water glows" ||
+        msgcheck "rusts" ||
+        msgcheck "corrodes" ||
         msgcheck "no gold" ||
+        msgcheck "a hand reaches up to bless the sword" ||
         msgcheck "zap") $
     inventoryDirty .= True
 
@@ -210,6 +281,10 @@ inferInventory messages = do
       True -> inventory .= []
       False -> do
         inv <- exhaustInventory
+
+        when (any isExcalibur inv) $
+          excaliburExists .= True
+
         inventory .= inv
  where
   exhaustInventory = do
@@ -260,7 +335,8 @@ inferRecentDeaths messages = do
   
 inferCurrentLevel :: MonadAI m => [T.Text] -> StateT WorldState m ()
 inferCurrentLevel messages = do
-  inferLevelIndex
+  inferSquareByMessages messages
+  inferLevelIndex messages
 
   inferInventory messages
 
@@ -272,6 +348,13 @@ inferCurrentLevel messages = do
       levels.at cl .= Just updated_lvl
       inferPeacefulnessOfMonsters
     _ -> logError "inferCurrentLevel: Impossible"
+
+inferSquareByMessages :: MonadAI m => [T.Text] -> StateT WorldState m ()
+inferSquareByMessages msgs = do
+  (_, cx, cy) <- currentScreen
+  when (any ("the fountain disappears" `T.isInfixOf`) msgs) $ do
+    cl <- use currentLevel
+    levels.at cl._Just.cells.ix (cx, cy).cellFeature .= Just Floor
 
 inferCurrentlyStandingSquare :: MonadAI m => Level -> [T.Text] -> StateT WorldState m Level
 inferCurrentlyStandingSquare lvl msgs = do
@@ -334,6 +417,9 @@ inferCurrentlyStandingSquare lvl msgs = do
 
     -- Do item list inferring
     newitems <- inferItemsBeingLookedAt (fromJust $ lvl^?cells.ix (cx, cy).cellItems)
+
+    when (any isExcalibur $ newitems^..itemPile.each) $
+      excaliburExists .= True
 
     let update2 = \x -> x & cells.ix (cx, cy).cellItems .~ newitems
 
@@ -416,6 +502,7 @@ descriptionToLevelFeature "ladder down" = Just Downstairs
 descriptionToLevelFeature "ladder up" = Just Upstairs
 descriptionToLevelFeature "grave" = Just Floor
 descriptionToLevelFeature "sink" = Just Floor
+descriptionToLevelFeature "magic portal" = Just MagicPortal
 
 descriptionToLevelFeature txt | T.isInfixOf "altar" txt = Just Altar
 descriptionToLevelFeature txt | T.isInfixOf "trap" txt = Just Trap
@@ -467,7 +554,7 @@ inferLevel lvl msgs = do
   updated_lvl2 <- inferCurrentlyStandingSquare updated_lvl1 msgs
 
   let updated_lvl = updateBoulderPushings lvl updated_lvl2 current_turn
-  return updated_lvl
+  return $ unfuzzConnections updated_lvl
  where
   inferStatues ss old_statues = do
     -- This one removes statues from squares that don't look like statues anymore
@@ -528,6 +615,7 @@ inferLevel lvl msgs = do
             "|" | fcolor == Yellow -> Just OpenedDoor
             "-" | fcolor == LightGray -> Just Wall
             "|" | fcolor == LightGray -> Just Wall
+            "^" | fcolor == BrightMagenta -> Just MagicPortal
             "^" -> Just Trap
             "\"" | fcolor == LightGray -> Just Trap
             ">" -> Just Downstairs

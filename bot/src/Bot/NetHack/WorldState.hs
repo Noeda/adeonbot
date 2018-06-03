@@ -1,5 +1,7 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -14,11 +16,27 @@ module Bot.NetHack.WorldState
   , Hitpoints
   , LevelIndex
   , hasFoodInInventory
-  , hasSoreLegs
   , lastDirectionMoved
+
+  -- Sore legs
+  , hasSoreLegs
   , soreLegsUntil
+
+  -- Stats
   , hp
   , maxHP
+  , experienceLevel
+  , alignment
+  , Alignment(..)
+
+  -- World connectivity
+  , addConnection
+  , getConnection
+  , unfuzzConnections
+  , usedStairs
+  , previousLocation
+  , Fuzziness(..)
+
   , emptyWorldState
   , levels
   , levelMeta
@@ -57,7 +75,6 @@ module Bot.NetHack.WorldState
   , Status(..)
   , ItemPileImage(..)
   , ItemPile
-  , Item(..)
   , ItemIdentity(..)
   , isFood
   , armor
@@ -70,10 +87,15 @@ module Bot.NetHack.WorldState
   , enchantment
   , corrosion
   , quantity
+
+  -- Items
+  , Item(..)
   , itemIdentity
   , itemPileImageAt
   , itemPileAt
   , itemPile
+  , itemAppearance
+
   , corpseName
   , cleanRecentMonsterDeaths
   , currentLevelT
@@ -97,15 +119,25 @@ module Bot.NetHack.WorldState
   , badFastTravelSquares
 
   -- Skill enhancing
-  , dirtyEnhancableSkills )
+  , dirtyEnhancableSkills
+
+  -- Excalibur
+  , excaliburExists
+  , excaliburDipAttempts
+  , isExcalibur )
   where
 
 import Bot.NetHack.Direction
-import Control.Monad.State.Strict ( execState )
+import Bot.NetHack.Logs
+import Control.Monad.State.Strict ( execState, modify, get )
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Except ( runExceptT, throwE )
 import Control.Lens hiding ( Level, levels, (.=) )
 import Data.Aeson
 import qualified Data.Array.IArray as A
 import Data.Data
+import Data.Foldable
+import Data.Monoid
 import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Data.Maybe
@@ -136,15 +168,29 @@ data WorldState = WorldState
   , _maxHP              :: !Hitpoints
   , _lastPrayed         :: !(Maybe Turn)
   , _turn               :: !Turn
+  , _experienceLevel    :: !Int
+  , _alignment          :: !Alignment
+
+  -- World connectivity tracking
+  , _usedStairs         :: !(Maybe (LevelIndex, (Int, Int), LevelFeature))
+  , _previousLocation   :: !(Maybe (LevelIndex, (Int, Int)))
+
+  -- Excalibur tracking
+  , _excaliburExists       :: !Bool
+  , _excaliburDipAttempts  :: !Int
 
   -- Skill enhancing
   , _dirtyEnhancableSkills :: !Bool   -- True if we saw a message that implies we could enhance some skill
   }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
+data Alignment = Lawful | Neutral | Chaotic | Unaligned
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
+
 data LevelMeta = LevelMeta
   { _levelDescription :: !T.Text
-  , _branchName       :: !T.Text }
+  , _branchName       :: !T.Text
+  , _levelNumber      :: !Int }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data MonsterDeathImage = MonsterDeathImage !T.Text !Int
@@ -152,6 +198,13 @@ data MonsterDeathImage = MonsterDeathImage !T.Text !Int
 
 newtype BoulderPushInfo = BoulderPushInfo
   { _expireTurn :: Maybe Turn }
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
+
+data Connection = Connection
+  { _targetLevel :: LevelIndex
+  , _targetCoords :: (Int, Int)
+  , _confirmedLevelFeatures :: S.Set LevelFeature
+  , _fuzzyLevelFeatures :: S.Set LevelFeature }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic )
 
 data Level = Level
@@ -167,6 +220,14 @@ data Level = Level
   , _failedWalks :: !(M.Map (Int, Int) (M.Map Direction (Turn, Int)))
   , _recentMonsterDeaths :: !(M.Map (Int, Int) [MonsterDeathImage])
   , _monsters :: !(M.Map (Int, Int) MonsterImage)
+
+  -- World connectivity. This map keeps track of connections to other places.
+  -- It may not be 100% exact. Hence, the values are lists.
+  -- For various reasons we may not know exactly where the connection is.
+  --
+  -- The level feature set is to correct fuzziness, by looking for those level
+  -- features close to the stairs/portal/whatever.
+  , _connectivity      :: !(M.Map (Int, Int) [Connection])
 
   -- These are for boulder pushing
   -- boulderPushes is a map from boulder location to a set of locations we
@@ -221,6 +282,7 @@ instance FromJSON Level where
       , _failedWalks = failed_walks
       , _boulderPushes = M.empty
       , _dirtiedSquares = S.empty
+      , _connectivity = M.empty
       , _badFastTravelSquares = M.empty }
 
   parseJSON _ = fail "FromJSON.Level: not an object"
@@ -247,6 +309,7 @@ data LevelFeature
   | Lava
   | Water
   | InkyBlackness
+  | MagicPortal
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 -- | Can I walk on it?
@@ -265,8 +328,10 @@ isPassable Wall = False
 isPassable Fountain = True
 isPassable LockedDoor = False
 isPassable InkyBlackness = False
+isPassable MagicPortal = False
 
 isPassableIncludeTraps :: LevelFeature -> Bool
+isPassableIncludeTraps MagicPortal = True
 isPassableIncludeTraps Trap = True
 isPassableIncludeTraps x = isPassable x
 
@@ -315,7 +380,8 @@ data Item = Item
   , _enchantment :: !(Maybe EnchantmentLevel)
   , _corrosion :: !CorrosionLevel
   , _quantity :: !Int
-  , _buc :: !(Maybe BUC) }
+  , _buc :: !(Maybe BUC)
+  , _itemAppearance :: !T.Text }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
 data ArmorSlot
@@ -369,6 +435,7 @@ data MonsterImage = MonsterImage
   , _monsterAppearance :: String
   , _monsterObservedMoving :: !Bool }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
+makeLenses ''Connection
 makeLenses ''MonsterImage
 makeLenses ''Level
 makeLenses ''LevelCell
@@ -391,6 +458,12 @@ emptyWorldState = WorldState
   , _inventoryDirty = True
   , _turn = 1
   , _lastPrayed = Nothing
+  , _excaliburDipAttempts = 0
+  , _excaliburExists = False
+  , _experienceLevel = 0
+  , _alignment = Unaligned
+  , _usedStairs = Nothing
+  , _previousLocation = Nothing
   , _dirtyEnhancableSkills = False }
 
 emptyLevelCell :: LevelCell
@@ -412,7 +485,8 @@ emptyLevel = Level
   , _failedWalks = M.empty
   , _boulderPushes = M.empty
   , _dirtiedSquares = S.empty
-  , _badFastTravelSquares = M.empty }
+  , _badFastTravelSquares = M.empty
+  , _connectivity = M.empty }
 
 hasStatue :: Level -> (Int, Int) -> Bool
 hasStatue lvl pos = fromMaybe False (do
@@ -482,3 +556,67 @@ squareDirty coords = lens get_it set_it
   get_it lvl = S.member coords (lvl^.dirtiedSquares)
   set_it lvl False = lvl & dirtiedSquares %~ S.delete coords
   set_it lvl True = lvl & dirtiedSquares %~ S.insert coords
+
+isExcalibur :: Item -> Bool
+isExcalibur item = item^.itemAppearance == "Excalibur"
+
+data Fuzziness
+  = Confirmed
+  | Fuzzy
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum )
+
+getConnection :: (Int, Int) -> Level -> Maybe (LevelIndex, (Int, Int))
+getConnection (x, y) lvl = do
+  conns <- M.lookup (x, y) (lvl^.connectivity)
+  connection <- find finder conns
+  return (connection^.targetLevel, connection^.targetCoords)
+ where
+  finder connection = not $ S.null $ connection^.confirmedLevelFeatures
+
+addConnection :: (Int, Int) -> (LevelIndex, (Int, Int)) -> [LevelFeature] -> Fuzziness -> Level -> Level
+addConnection (old_x, old_y) (target_level, (tx, ty)) potential_features fuzziness lvl = unfuzzConnections $
+  let conn = Connection
+        { _targetLevel = target_level
+        , _targetCoords = (tx, ty)
+        , _confirmedLevelFeatures = if fuzziness == Confirmed then S.fromList potential_features else S.empty
+        , _fuzzyLevelFeatures = if fuzziness == Fuzzy then S.fromList potential_features else S.empty }
+
+   in case M.lookup (old_x, old_y) (lvl^.connectivity) of
+        Nothing -> lvl & connectivity.at (old_x, old_y) .~ Just [conn]
+        Just conns | conn `elem` conns -> lvl
+        Just conns ->
+          lvl & connectivity.at (old_x, old_y) .~ Just (conn:conns)
+
+-- This function does its best to clean up fuzzy level features.
+--
+-- If there is a fuzzy set of features that are not known to 100% correspond to
+-- a link on a level (a portal/stairs), then this function will try to confirm
+-- them, if it sees there is an appropriate level feature for the connection.
+unfuzzConnections :: Level -> Level
+unfuzzConnections lvl = flip execState lvl $ do
+  old_conns <- use connectivity
+  modify $ connectivity .~ M.empty
+  ifor_ old_conns $ \(x, y) connections -> do
+    for_ connections $ \connection -> do
+      result <- runExceptT $ for_ ((x, y):neighboursOf x y) $ \(nx, ny) -> do
+        maybe_feat <- lift $ (^?cells.ix (nx, ny).cellFeature._Just) <$> get
+        case maybe_feat of
+          Nothing -> return ()
+          Just (feat :: LevelFeature) ->
+            if feat `S.member` (connection^.fuzzyLevelFeatures)
+              then logTrace ("Confirming level connection at " <> show (x, y) <> " to " <> show (nx, ny)) $
+                     confirmConnection connection (nx, ny) (connection^.fuzzyLevelFeatures) >> throwE ()
+              else return ()
+
+      case result of
+        Left () -> return ()
+        Right{} -> connectivity.at (x, y) %= \case
+          Nothing -> Just [connection]
+          Just conns -> Just $ connection:conns
+ where
+  confirmConnection connection (nx, ny) feats = do
+    let new_conn = connection & (confirmedLevelFeatures .~ feats) .
+                                (fuzzyLevelFeatures .~ S.empty)
+    connectivity.at (nx, ny) %= Just . \case
+      Nothing -> [new_conn]
+      Just conns -> new_conn:conns

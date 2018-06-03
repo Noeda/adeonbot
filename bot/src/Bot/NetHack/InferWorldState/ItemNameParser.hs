@@ -18,13 +18,15 @@ nameToItem txt | T.isInfixOf "statue of" txt = Item
   , _corrosion = 0
   , _enchantment = Nothing
   , _quantity = 1
-  , _buc = Nothing }
+  , _buc = Nothing
+  , _itemAppearance = T.strip txt }
 nameToItem (T.strip -> txt'') = Item
   { _itemIdentity = item_identity
   , _corrosion = corrosion
   , _enchantment = enchantment
   , _quantity = quantity
-  , _buc = buc }
+  , _buc = buc
+  , _itemAppearance = T.pack name }
  where
   txt' = T.unpack txt''
 

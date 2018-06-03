@@ -19,6 +19,7 @@ import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
 import Bot.NetHack.SelectItem
 import Bot.NetHack.ScreenPattern
+import Bot.NetHack.Search
 import Bot.NetHack.WorldState
 import Control.Lens hiding ( Level, levels )
 import Control.Monad
@@ -48,6 +49,7 @@ decisionMaker = forever $
                  waitIfBlind <|>
                  eatCorpses <|>
                  pickUpSupplies <|>
+                 dipForExcalibur <|>
                  pursue "Going towards an explorable at " findExplorablePath <|>
                  findClosedDoors <|>
                  findLockedDoors <|>
@@ -78,6 +80,75 @@ decisionMaker = forever $
       -- If the target is right next to us, move using normal movement.
       (p:_rest) -> basic_step p
       _ -> empty
+
+-- This function will try to dip for excalibur.
+--
+-- It checks for requirements and moves towards any known fountains if it can.
+dipForExcalibur :: (Alternative m, MonadWAI m) => m ()
+dipForExcalibur = do
+  wstate <- askWorldState
+  guard (wstate^.experienceLevel >= 5)
+  guard (not $ wstate^.excaliburExists)
+  guard (wstate^.excaliburDipAttempts < 50)
+  guard (wstate^.alignment == Lawful)
+  guard (any (\item ->
+                (item^.itemAppearance) == "long sword")
+             (wstate^.inventory))
+
+  -- Is our current square a fountain? DIP IT
+  (_, cx, cy) <- currentScreen
+
+  if firstOf (currentLevelT.cells.ix (cx, cy).cellFeature) wstate == Just (Just Fountain)
+    then dipExcalibur
+    else walkToFountain (cx, cy)
+ where
+  dipExcalibur = do
+    sendRaw "#dip\n"
+    dip_success <- matchf "What do you want to dip?"
+    guard dip_success
+    sendRaw "*"
+    not_anything <- matchf "Not carrying anything."
+    when not_anything $ do
+      sendRaw "\x1b"
+      sendRaw "\x1b"
+      empty
+
+    maybe_selection <- selectItem (\item -> item^.itemAppearance == "long sword")
+    guard (isJust maybe_selection)
+    let selection = fromJust $ maybe_selection
+    sendRaw selection
+
+    dip_in_fountain1 <- matchf "Dip"
+    dip_in_fountain2 <- matchf "into the fountain?"
+    unless (dip_in_fountain1 && dip_in_fountain2) empty
+
+    modWorld $ (excaliburDipAttempts +~ 1) .
+               (execState dirtyInventory)      -- sword may rust or "water may glow", so dirty our inventory to recheck it
+
+    send "y"
+
+  walkToFountain (cx, cy) = do
+    wstate <- askWorldState
+    is_passable <- getPassableFunction
+    wresult <- al' $ worldSearch
+                      (cx, cy)
+                      (\cell -> cell^.cellFeature == Just Fountain)
+                      wstate
+                      is_passable
+
+    let lvl_idx = wstate^.currentLevel
+
+    case wresult of
+      AtTarget -> dipExcalibur
+      ChangeLevel -> do
+        lfeat <- getCurrentLevelFeature wstate
+        case lfeat of
+          Downstairs  -> modWorld (usedStairs .~ Just (lvl_idx, (cx, cy), Downstairs)) >> send ">"
+          Upstairs    -> modWorld (usedStairs .~ Just (lvl_idx, (cx, cy), Upstairs)) >> send "<"
+          MagicPortal -> empty   -- no guaranteed way to trigger portal
+          _           -> empty
+      MoveToTarget dir path ->
+        moveToPathOrDirection' dir (head path)
 
 waitIfBlind :: (Alternative m, MonadWAI m) => m ()
 waitIfBlind = do
@@ -576,8 +647,6 @@ tryEating corpse_eating_check floor_eating_check eat_normal_food = do
        | otherwise
         -> logTrace ("Unexpected response to 'e' command: " <> show line) empty
 
-  
-
 getCurrentLevel :: (Alternative m, Monad m) => WorldState -> m Level
 getCurrentLevel wstate =
   let curlvl = wstate^.currentLevel
@@ -585,6 +654,14 @@ getCurrentLevel wstate =
    in case mlvl of
         Nothing -> empty
         Just lvl -> return lvl
+
+getCurrentLevelFeature :: (Alternative m, MonadAI m) => WorldState -> m LevelFeature
+getCurrentLevelFeature wstate = do
+  lvl <- getCurrentLevel wstate
+  (_, cx, cy) <- currentScreen
+  case join $ firstOf (cells.ix (cx, cy).cellFeature) lvl of
+    Nothing -> empty
+    Just feat -> return feat
 
 al' :: (Alternative m, MonadAI m) => Maybe a -> m a
 al' = \case
@@ -603,10 +680,11 @@ findDownstairs' :: (Alternative m, MonadWAI m)
 findDownstairs' is_passable = do
   wstate <- askWorldState
   lvl <- getCurrentLevel wstate
+  let lvl_idx = wstate^.currentLevel
   (_, cx, cy) <- currentScreen
 
   if join (lvl^?cells.ix (cx, cy).cellFeature) == Just Downstairs
-    then send ">"
+    then modWorld (usedStairs .~ Just (lvl_idx, (cx, cy), Downstairs)) >> send ">"
     else findWayToFeatures Downstairs
            (\d _ -> moveToDirection' d)
            (\d _ tgt -> moveToPathOrDirection' d tgt)
@@ -817,49 +895,6 @@ findExplorablePath = do
                       (\goal _ -> S.member goal desirables)
                       lvl
                       is_passable
-
-isWalkableTransition :: Level -> (Int, Int) -> (Int, Int) -> ((Int, Int) -> Bool) -> (LevelFeature -> Bool) -> Bool
-isWalkableTransition level (nx, ny) (x, y) exceptions is_passable =
-  not_failed_walk_count_excluded && rest
-
- where
-  not_failed_walk_count_excluded = fromMaybe True $ do
-    mmap <- M.lookup (x, y) (level^.failedWalks)
-    dir <- diffToDir (x, y) (nx, ny)
-    (_failed_turn, count) <- M.lookup dir mmap
-    return $ not (count >= 10)
-
-  rest =
-    (fmap is_passable (join $ level^?cells.ix (nx, ny).cellFeature) == Just True &&
-     (S.notMember (nx, ny) $ level^.boulders) &&
-       join (level^?monsters.at (nx, ny)) == Nothing &&
-       diagonalFilter (nx, ny) (x, y)) ||
-
-     (exceptions (nx, ny) &&
-      diagonalFilter (nx, ny) (x, y))
-
-  diagonalFilter (nx, ny) (x, y) =
-    (nx == x || ny == y) ||
-    ((join (level^?cells.ix (nx, ny).cellFeature) /= Just OpenedDoor) &&
-     (join (level^?cells.ix (x, y).cellFeature) /= Just OpenedDoor))
-{-# INLINE isWalkableTransition #-}
-
-levelSearch :: (Int, Int)
-            -> ((Int, Int) -> Maybe LevelCell -> Bool)
-            -> Level
-            -> (LevelFeature -> Bool)
-            -> Maybe [(Int, Int)]
-levelSearch start_pos is_goal level is_passable =
-  breadthFirstSearch start_pos
-                     (\pos -> getWalkableNeighbours level pos (\npos -> is_goal npos Nothing) is_passable)
-                     (\(gx, gy) -> is_goal (gx, gy) (level^?cells.ix (gx, gy)))
-
-getWalkableNeighbours :: Level -> (Int, Int) -> ((Int, Int) -> Bool) -> (LevelFeature -> Bool) -> [(Int, Int)]
-getWalkableNeighbours level (x, y) exceptions is_passable =
-  [ (nx, ny) | nx <- [x-1..x+1], ny <- [y-1..y+1],
-               (nx /= x || ny /= y) &&
-                isWalkableTransition level (nx, ny) (x, y) exceptions is_passable ]
-{-# INLINE getWalkableNeighbours #-}
 
 -- Returns True if some square is walkable, not just in level features but also
 -- in the sense it doesn't have boulders or monsters.
