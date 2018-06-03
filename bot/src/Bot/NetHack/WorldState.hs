@@ -76,6 +76,7 @@ module Bot.NetHack.WorldState
   , ItemPileImage(..)
   , ItemPile
   , ItemIdentity(..)
+  , ItemHoldings(..)
   , isFood
   , armor
   , ArmorSlot(..)
@@ -95,6 +96,7 @@ module Bot.NetHack.WorldState
   , itemPileAt
   , itemPile
   , itemAppearance
+  , itemHoldings
 
   , corpseName
   , cleanRecentMonsterDeaths
@@ -381,8 +383,19 @@ data Item = Item
   , _corrosion :: !CorrosionLevel
   , _quantity :: !Int
   , _buc :: !(Maybe BUC)
-  , _itemAppearance :: !T.Text }
+  , _itemAppearance :: !T.Text
+  , _itemHoldings :: !ItemHoldings }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
+
+data ItemHoldings
+  = Wielded
+  | Worn
+  | AlternateWeapon
+  | RightRingHand
+  | LeftRingHand
+  | Embedded
+  | NoHoldings
+  deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 
 data ArmorSlot
   = Helmet

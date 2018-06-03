@@ -810,9 +810,11 @@ inferPeacefulnessOfMonsters = do
   case cl^.levels.at (cl^.currentLevel) of
     Nothing -> return ()
     Just lvl -> do
-      for_ levelSquares $ \(x, y) ->
-        case lvl^?monsters.at (x, y)._Just.isPeaceful of
-          Just Nothing -> checkPeacefulness (x, y)
+      for_ levelSquares $ \(x, y) -> do
+        let mon = lvl^?monsters.at (x, y)._Just
+        case (^.isPeaceful) <$> mon of
+          Just Nothing | ((^.monsterAppearance) <$> mon) /= Just "I"
+            -> checkPeacefulness (x, y)
           _ -> return ()
 
 inferSearch :: (MonadState WorldState m) => (Int, Int) -> m ()

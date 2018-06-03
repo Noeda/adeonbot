@@ -35,9 +35,15 @@ checkPeacefulness (x, y) = do
 
   let ll = levels.at (cl^.currentLevel)._Just
 
-  line <- getScreenLine 0
-  when (T.index line 1 == ' ' && T.index line 0 /= ' ') $ do
-    case T.unpack line =~ (" \\((.+)\\) " :: String) of
+  -- Is it a long name with a --More-- on the screen?
+  more <- matchf "--More--"
+
+  line1 <- getScreenLine 0
+  line2 <- if more then getScreenLine 1 else return ""
+  let line = cleanup $ line1 <> line2
+
+  logTrace ("line: " <> show line) $ when (T.index line 1 == ' ' && T.index line 0 /= ' ') $ do
+    case T.unpack line =~ (" \\((.+)\\)" :: String) of
       [[_whole, T.pack -> monname]] -> do
         -- Is it a statue?
         if T.isInfixOf "statue of" monname
@@ -54,4 +60,19 @@ checkPeacefulness (x, y) = do
             else old_feature
 
       _ -> return ()
+
+  when more $ send " "
+
+cleanup :: T.Text -> T.Text
+cleanup (T.strip -> txt) =
+  let p = go txt
+   in if T.isSuffixOf "--More--" p
+        then T.dropEnd 8 p
+        else p
+ where
+  go txt =
+    let nxt = T.replace "  " " " txt
+     in if nxt /= txt
+           then go nxt
+           else nxt
 

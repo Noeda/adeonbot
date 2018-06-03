@@ -19,14 +19,16 @@ nameToItem txt | T.isInfixOf "statue of" txt = Item
   , _enchantment = Nothing
   , _quantity = 1
   , _buc = Nothing
-  , _itemAppearance = T.strip txt }
+  , _itemAppearance = T.strip txt
+  , _itemHoldings = NoHoldings }
 nameToItem (T.strip -> txt'') = Item
   { _itemIdentity = item_identity
   , _corrosion = corrosion
   , _enchantment = enchantment
   , _quantity = quantity
   , _buc = buc
-  , _itemAppearance = T.pack name }
+  , _itemAppearance = T.pack name
+  , _itemHoldings = holdings }
  where
   txt' = T.unpack txt''
 
@@ -183,5 +185,23 @@ nameToItem (T.strip -> txt'') = Item
     [[_whole, first_part]] -> first_part
     _ -> partlyeaten_removed
 
-  name = weight_removed
+  -- wielding/holding
+  (holdings, holdings_removed) =
+    let wr = T.pack weight_removed
+     in (\(a, b) -> (a, T.unpack b)) $
+        if | "(weapon in hand)" `T.isSuffixOf` wr
+             -> (Wielded, T.strip $ T.dropEnd 16 wr)
+           | "(being worn)" `T.isSuffixOf` wr
+             -> (Worn, T.strip $ T.dropEnd 12 wr)
+           | "(alternate weapon; not wielded)" `T.isSuffixOf` wr
+             -> (AlternateWeapon, T.strip $ T.dropEnd 31 wr)
+           | "(on right hand)" `T.isSuffixOf` wr
+             -> (RightRingHand, T.strip $ T.dropEnd 15 wr)
+           | "(on left hand)" `T.isSuffixOf` wr
+             -> (LeftRingHand, T.strip $ T.dropEnd 14 wr)
+           | "(embedded in your skin)" `T.isSuffixOf` wr
+             -> (Embedded, T.strip $ T.dropEnd 23 wr)
+           | otherwise
+             -> (NoHoldings, wr)
 
+  name = holdings_removed
