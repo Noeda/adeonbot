@@ -35,7 +35,8 @@ newtype Sender = Sender (B.ByteString -> IO ())
 
 data ActivityReport = ActivityReport
   { lastActivityObserved :: !Integer
-  , endOfDataObserved    :: !Bool
+  , endOfDataObserved    :: !Int
+  , endOfDataExpected    :: !Int
   , pendingDataSend      :: !Bool
   , screenState          :: !ScreenState
   , cursorX              :: !Int
@@ -56,26 +57,16 @@ makeBotLogicRunner = BotLogicRunner
 
 runSynchronizer :: BotLogicRunner state -> Sender -> ActivitySyncer -> ToleratedLatency -> state -> IO ()
 runSynchronizer (BotLogicRunner bot_logic) (Sender sender) activity_syncer latency initial_state =
-  loop_it initial_state False
+  loop_it initial_state
  where
-  -- The multisent is to override vt_tiledata synchronization point
-  --
-  -- Imagine we send this string to the game "#overview"
-  --
-  -- After each letter, nethack will send us back a signal that hey, I'm
-  -- waiting for more input. We might actually start trying to interpret our
-  -- output before NetHack has processed the whole string we sent.
-  --
-  -- The solution is that any time we send more than one character, the
-  -- vt_tiledata optimization will not be applied.
-  loop_it state multisent = do
-    (screen_state, cx, cy) <- waitUntilCooldown latency activity_syncer multisent
+  loop_it state = do
+    (screen_state, cx, cy) <- waitUntilCooldown latency activity_syncer
     (new_state, sending) <- bot_logic state screen_state cx cy
     logTrace ("Sending " <> show sending) $ sender sending
-    loop_it new_state (B.length sending > 1)
+    loop_it new_state
 
-waitUntilCooldown :: ToleratedLatency -> ActivitySyncer -> Bool -> IO (ScreenState, Int, Int)
-waitUntilCooldown latency (ActivitySyncer get_last_activity) multisent = loop_it
+waitUntilCooldown :: ToleratedLatency -> ActivitySyncer -> IO (ScreenState, Int, Int)
+waitUntilCooldown latency (ActivitySyncer get_last_activity) = loop_it
  where
   loop_it = do
     result <- runMaybeT $ do
@@ -88,9 +79,9 @@ waitUntilCooldown latency (ActivitySyncer get_last_activity) multisent = loop_it
       now <- liftIO $ toNanoSecs <$> getTime Monotonic
 
       let time_between_last_activity = now - lastActivityObserved report
-          tolerance_nsecs = if endOfDataObserved report && not multisent
+          tolerance_nsecs = if endOfDataObserved report >= endOfDataExpected report && endOfDataExpected report >= 0
                               then min latency 40000000 -- 40ms
-       			      else latency
+                              else latency
 
 
       -- Stop if it's been too short time since last activity observed from connection
