@@ -113,10 +113,14 @@ neighbours fc pos@(x, y) =
       [(x+1, y), (x-1, y), (x, y-1), (x, y+1)
       ,(x+1, y+1), (x+1, y-1), (x-1, y+1), (x-1, y+1)]
  where
-  filterByCardinal tpos@(tx, ty) = case fc^.obstacleAt tpos of
-    Floor -> True
-    CardinalFloor | tx == x || ty == y -> True
-    _ -> False
+  filterByCardinal tpos@(tx, ty) =
+    (case fc^.obstacleAt pos of
+       CardinalFloor -> tx == x || ty == y
+       _ -> True) &&
+    case fc^.obstacleAt tpos of
+      Floor -> True
+      CardinalFloor | tx == x || ty == y -> True
+      _ -> False
 {-# INLINE neighbours #-}
 
 haveMonstersHitPlayers :: FightingConditions -> FightingConditions
