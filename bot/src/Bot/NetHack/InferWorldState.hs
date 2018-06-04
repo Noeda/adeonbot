@@ -72,7 +72,7 @@ inferEnhancableSkills :: MonadState WorldState m => [T.Text] -> m ()
 inferEnhancableSkills msgs
   | any (T.isInfixOf "You feel more confident in your weapon skills.") msgs =
       dirtyEnhancableSkills .= True
-  | otherwise = return ()
+  | otherwise = dirtyEnhancableSkills .= False
 
 inferHitpoints :: (MonadAI m, MonadState WorldState m) => m ()
 inferHitpoints =
