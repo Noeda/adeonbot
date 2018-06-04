@@ -113,10 +113,10 @@ dipForExcalibur = do
   (_, cx, cy) <- currentScreen
 
   if firstOf (currentLevelT.cells.ix (cx, cy).cellFeature) wstate == Just (Just Fountain)
-    then dipExcalibur
+    then dipExcalibur cx cy
     else walkToFountain (cx, cy)
  where
-  dipExcalibur = do
+  dipExcalibur cx cy = do
     sendRaw "#dip\n"
     dip_success <- matchf "What do you want to dip?"
     guard dip_success
@@ -131,6 +131,11 @@ dipForExcalibur = do
     guard (isJust maybe_selection)
     let selection = fromJust $ maybe_selection
     sendRaw selection
+
+    nothing_to_dip_into <- matchf "You don't have anything to"
+    when nothing_to_dip_into $ do
+      modWorld (currentLevelT.squareDirty (cx, cy) .~ True)
+      empty
 
     dip_in_fountain1 <- matchf "Dip"
     dip_in_fountain2 <- matchf "into the fountain?"
@@ -153,7 +158,7 @@ dipForExcalibur = do
     let lvl_idx = wstate^.currentLevel
 
     case wresult of
-      AtTarget -> dipExcalibur
+      AtTarget -> dipExcalibur cx cy
       ChangeLevel -> do
         lfeat <- getCurrentLevelFeature wstate
         case lfeat of
