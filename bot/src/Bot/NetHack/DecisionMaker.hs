@@ -190,6 +190,7 @@ enhanceSkillsIfEnhancable = do
     then do modWorld $ dirtyEnhancableSkills .~ False
             sendRaw "#enhance\n"
             doEnhancing
+            yield
     else empty
  where
   doEnhancing = do
@@ -203,7 +204,7 @@ enhanceSkillsIfEnhancable = do
               if pages || end
                 then do sendRaw " "   -- Move on to next page
                         doEnhancing
-                else empty
+                else return ()
 
 prayIfInTrouble :: (Alternative m, MonadWAI m) => m ()
 prayIfInTrouble = do
