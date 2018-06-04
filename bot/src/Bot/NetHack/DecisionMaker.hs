@@ -422,13 +422,14 @@ moveToPathOrDirection :: (Alternative m, MonadWAI m)
                       -> m ()
 moveToPathOrDirection _ [] = empty
 moveToPathOrDirection src [tgt] | src == tgt = return ()
-moveToPathOrDirection src path =
-  case diffToDir src (last path) of
+moveToPathOrDirection src [tgt] =
+  case diffToDir src tgt of
     Just dir -> moveToDirection' dir
-    Nothing ->
-      fastMoveToTarget (last path) <|> case diffToDir src (head path) of
-        Nothing -> empty
-        Just dir -> moveToDirection' dir
+    _ -> empty
+moveToPathOrDirection src path =
+  fastMoveToTarget (last path) <|> case diffToDir src (head path) of
+    Nothing -> empty
+    Just dir -> moveToDirection' dir
 
 moveToDirection' :: MonadWAI m => Direction -> m ()
 moveToDirection' dir = do
