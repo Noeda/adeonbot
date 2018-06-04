@@ -126,7 +126,11 @@ module Bot.NetHack.WorldState
   -- Excalibur
   , excaliburExists
   , excaliburDipAttempts
-  , isExcalibur )
+  , isExcalibur
+
+  -- Tactics
+  , tacticsActive
+  , tacticsBlacklist )
   where
 
 import Bot.NetHack.Direction
@@ -183,6 +187,11 @@ data WorldState = WorldState
 
   -- Skill enhancing
   , _dirtyEnhancableSkills :: !Bool   -- True if we saw a message that implies we could enhance some skill
+
+  -- How long have we been in "tactics" mode? Used to force tactics off if it
+  -- causes us to stay put and not do anything.
+  , _tacticsActive         :: !Int
+  , _tacticsBlacklist      :: !Turn
   }
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, FromJSON, ToJSON )
 
@@ -477,7 +486,9 @@ emptyWorldState = WorldState
   , _alignment = Unaligned
   , _usedStairs = Nothing
   , _previousLocation = Nothing
-  , _dirtyEnhancableSkills = False }
+  , _dirtyEnhancableSkills = False
+  , _tacticsBlacklist = 0
+  , _tacticsActive = 0 }
 
 emptyLevelCell :: LevelCell
 emptyLevelCell = LevelCell

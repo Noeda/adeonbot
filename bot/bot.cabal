@@ -16,6 +16,7 @@ library
                        Bot.NetHack.Config
                        Bot.NetHack.DecisionMaker
                        Bot.NetHack.EdibleCorpses
+                       Bot.NetHack.FightingTactics
                        Bot.NetHack.InferWorldState
                        Bot.NetHack.InferWorldState.ItemNameParser
                        Bot.NetHack.InferWorldState.PeacefulCheck
@@ -33,15 +34,18 @@ library
   build-depends:       aeson
                       ,array
                       ,async
+                      ,astar>=0.3
                       ,base >=4.7 && <5.0
                       ,bytestring
                       ,clock
                       ,containers
                       ,deepseq
                       ,free
+                      ,hashable
                       ,http-types
                       ,lens
                       ,mtl
+                      ,parallel
                       ,process
                       ,regex-tdfa
                       ,stm
@@ -49,6 +53,7 @@ library
                       ,text
                       ,time
                       ,transformers
+                      ,unordered-containers
                       ,yaml
                       ,wai
                       ,wai-websockets
@@ -64,5 +69,13 @@ executable adeonbot
                       ,bot
   ghc-options:         -Wall -fno-warn-name-shadowing -threaded -rtsopts "-with-rtsopts=-N2 -A512m -n8m -I0" -O2
   hs-source-dirs:      exe
+  default-language:    Haskell2010
+
+executable fighting-simulation
+  main-is:             Main.hs
+  build-depends:       base
+                      ,bot
+  ghc-options:         -Wall -fno-warn-name-shadowing -threaded -rtsopts "-with-rtsopts=-N2 -A512m -n8m -I0" -O2
+  hs-source-dirs:      fighting-simulation
   default-language:    Haskell2010
 

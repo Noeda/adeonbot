@@ -14,6 +14,8 @@ module Bot.NetHack.DecisionMaker
 import Bot.NetHack.BFS
 import Bot.NetHack.Direction
 import Bot.NetHack.EdibleCorpses
+import Bot.NetHack.FightingTactics hiding ( Floor )
+import qualified Bot.NetHack.FightingTactics as FT
 import Bot.NetHack.InferWorldState
 import Bot.NetHack.Logs
 import Bot.NetHack.MonadAI
@@ -45,7 +47,8 @@ decisionMaker = forever $
                  enhanceSkillsIfEnhancable <|>
                  prayIfInTrouble <|>
                  eatIfHungry <|>
-                 pursue "Going towards monster at " findMonsterKill <|>
+                 fight <|>
+                 (modWorld (tacticsActive .~ 0) >> empty) <|>
                  restIfLowHP <|>
                  waitIfBlind <|>
                  eatCorpses <|>
@@ -59,6 +62,16 @@ decisionMaker = forever $
                  searchAround <|>
                  logError "nothing to do")
  where
+  fight = do
+    wstate <- askWorldState
+    if wstate^.tacticsBlacklist >= wstate^.turn
+      then pursue "Pursuing a monster to kill them" findMonsterKill
+      else do fightUsingTactics
+              modWorld (tacticsActive +~ 1)
+              when (wstate^.tacticsActive >= 50) $
+                logTrace "Blacklisting tactics for a moment." $
+                  modWorld (tacticsBlacklist .~ (wstate^.turn + 50))
+
   pursue msg get_path = do
     path <- get_path
     (_, cx, cy) <- currentScreen
@@ -421,6 +434,7 @@ moveToDirection' :: MonadWAI m => Direction -> m ()
 moveToDirection' dir = do
   (_, cx1, cy1) <- currentScreen
   wstate1 <- askWorldState
+  setLastDirectionMoved (Just dir)
   send $ directionToByteString dir
   wstate2 <- askWorldState
   (_, cx2, cy2) <- currentScreen
@@ -434,6 +448,7 @@ moveToDirection source target = do
   let d = directionToByteString dir
   (_, cx1, cy1) <- currentScreen
   wstate1 <- askWorldState
+  setLastDirectionMoved (Just dir)
   send d
   wstate2 <- askWorldState
   (_, cx2, cy2) <- currentScreen
@@ -894,6 +909,79 @@ findWayToFeatures feature is_next towards_this_way is_passable = do
       towards_this_way d p (last $ p:rest)
     _ -> empty
 
+fightUsingTactics :: (Alternative m, MonadWAI m) => m ()
+fightUsingTactics = do
+  wstate <- askWorldState
+  (_, cx, cy) <- currentScreen
+  lvl <- getCurrentLevel wstate
+
+  let mset = M.keysSet $ M.filter shouldAttackMonster (lvl^.monsters)
+  if | S.size mset == 1
+       -> moveToPathOrDirection (cx, cy) =<< findMonsterKill
+     | S.null mset
+       -> empty
+     | otherwise
+       -> useTactics mset
+ where
+  -- This is the "radius" of how far the fighting tactics simulator will
+  -- consider. Larger values quickly make the tactics very slow so try to keep
+  -- it low. Higher values also make the tactics simulator smarter.
+  tacticsSquareSize = 5
+
+  useTactics monster_set = do
+    wstate <- askWorldState
+    lvl <- getCurrentLevel wstate
+    (_, cx, cy) <- currentScreen
+    let coords = [(x, y) | x <- [cx-tacticsSquareSize,cx-tacticsSquareSize+1..cx+tacticsSquareSize]
+                         , y <- [cy-tacticsSquareSize,cy-tacticsSquareSize+1..cy+tacticsSquareSize]]
+
+        obstacles = M.fromList $ coords <&> \(x, y) -> ((x, y),
+          case lvl^?cells.ix (x, y).cellFeature._Just of
+            _ | (x, y) == (cx, cy) -> FT.Floor
+            Just feat | feat == OpenedDoor -> CardinalFloor
+            Just feat -> if isPassable feat then FT.Floor else Obstacle
+            _ -> Obstacle)
+
+        scoords = S.fromList coords
+        monsters = S.filter (\x -> S.member x scoords) monster_set
+
+        fc = mkFightingConditions (cx, cy)
+                                  obstacles
+                                  monsters
+
+        best_move = computeBestMoveLocation fc
+
+    when (S.null monsters) empty
+
+    if S.size monsters == 1
+      then moveToPathOrDirection (cx, cy) =<< findMonsterKill
+      else if best_move == (cx, cy)
+             then logTrace ("Tactics say to stay put: " <> show (cx, cy)) $
+                    fightAdjacentMonsters
+             else logTrace ("Moving according to tactics: " <> show best_move) $
+                    moveToDirection (cx, cy) best_move
+
+  fightAdjacentMonsters = do
+    (_, cx, cy) <- currentScreen
+    wstate <- askWorldState
+    lvl <- getCurrentLevel wstate
+    result <- runExceptT $ for_ (neighboursOf cx cy) $ \(nx, ny) ->
+      case M.lookup (nx, ny) (lvl^.monsters) of
+        Just mon | shouldAttackMonster mon -> do
+          lift $ moveToDirection (cx, cy) (nx, ny)
+          throwE ()
+        _ -> return ()
+
+    case result of
+      Left{}  -> return ()
+      Right{} -> send "s"
+
+shouldAttackMonster :: MonsterImage -> Bool
+shouldAttackMonster m =
+  m^.isPeaceful == Just False &&
+  m^.monster /= FloatingEyeMonster &&
+  ((m^.monster /= NymphMonster) || (m^.monsterObservedMoving == True))
+
 findMonsterKill :: (Alternative m, MonadWAI m) => m [(Int, Int)]
 findMonsterKill = do
   wstate <- askWorldState
@@ -902,10 +990,7 @@ findMonsterKill = do
 
   is_passable <- getPassableFunction
 
-  let mset = M.keysSet $ M.filter (\m -> m^.isPeaceful == Just False &&
-                                         m^.monster /= FloatingEyeMonster &&
-                                         ((m^.monster /= NymphMonster) || (m^.monsterObservedMoving == True)))
-                                  (lvl^.monsters)
+  let mset = M.keysSet $ M.filter shouldAttackMonster (lvl^.monsters)
    in al' $
       levelSearch (cx, cy)
                   (\goal _ -> S.member goal mset && goal /= (cx, cy))

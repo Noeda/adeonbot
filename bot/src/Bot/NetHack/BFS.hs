@@ -3,15 +3,36 @@
 
 module Bot.NetHack.BFS
   ( breadthFirstSearch
+  , astarSearch
   , expand )
   where
 
 import Data.Foldable
+import Data.Graph.AStar
+import Data.Hashable
+import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
+-- | Similar to `breadthFirstSearch` but uses A* instead.
+--
+-- You need to supply end goal target point and a heuristic function for this
+-- to work so it's not a drop-in replacement for `breadthFirstSearch`.
+astarSearch :: (Hashable a, Ord a, Ord c, Num c)
+            => a
+            -> (a -> [a])
+            -> a              -- ^ Goal
+            -> (a -> c)       -- ^ Heuristic, distance to goal
+            -> Maybe [a]
+astarSearch start neighbours goal heuristic =
+  aStar (\v -> HS.fromList $ neighbours v)
+        (\_ _ -> 1)
+        heuristic
+        (== goal)
+        start
+
 -- | Breadth-first search. sUCH...GENERUC!!!!
-breadthFirstSearch :: forall a. (Ord a, Show a)
+breadthFirstSearch :: forall a. Ord a
                    => a           -- ^ Starting point.
                    -> (a -> [a])  -- ^ Get neighbours of a point.
                    -> (a -> Bool) -- ^ Is this a goal point?
@@ -50,7 +71,7 @@ breadthFirstSearch start neighbours is_goal =
     Just next_pos -> pos:backTrack reverse_map next_pos
 
 -- | Expands to all found neighbours.
-expand :: forall a. (Ord a, Show a)
+expand :: forall a. Ord a
        => a           -- ^ Staring point.
        -> (a -> [a])  -- ^ Get neighbours of a point.
        -> S.Set a     -- ^ All reachable points, including starting point.
@@ -62,4 +83,3 @@ expand start_point neighbours = iteration (S.singleton start_point) (S.singleton
                                               visited_points
         visited_points_next_time = S.union visit_points_next_time visited_points
      in iteration visit_points_next_time visited_points_next_time
-
