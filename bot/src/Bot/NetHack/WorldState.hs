@@ -353,6 +353,7 @@ data Monster
   | UnremarkableMonster    -- Moves towards you and hits you. Most monsters are of this type.
   | FloatingEyeMonster     -- If you hit it directly, you get frozen.
   | NymphMonster           -- Stealers.
+  | InvisibleMonster       -- Invisible guys.
   | MindFlayerMonster      -- Evil stuff.
   deriving ( Eq, Ord, Show, Read, Typeable, Data, Generic, Enum, FromJSON, ToJSON )
 

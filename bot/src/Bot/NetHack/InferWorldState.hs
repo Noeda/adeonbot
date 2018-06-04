@@ -763,6 +763,8 @@ inferMonsters current_turn statuses ss lvl (cx, cy) monsters =
              -> retmon $ monsterMovedMaybe $ newmon FloatingEyeMonster
            | foregroundColor == Magenta && contents == "h"
              -> retmon $ monsterMovedMaybe $ newmon AmbiguousMonster
+           | (foregroundColor == White || foregroundColor == LightGray) && contents == "I"
+             -> retmon $ monsterMovedMaybe $ newmon InvisibleMonster
            | contents == "n"
              -> retmon $ monsterMovedMaybe $ newmon NymphMonster
            | otherwise -> retmon $ monsterMovedMaybe $ newmon UnremarkableMonster
@@ -814,7 +816,7 @@ inferPeacefulnessOfMonsters = do
       for_ levelSquares $ \(x, y) -> do
         let mon = lvl^?monsters.at (x, y)._Just
         case (^.isPeaceful) <$> mon of
-          Just Nothing | ((^.monsterAppearance) <$> mon) /= Just "I"
+          Just Nothing | ((^.monster) <$> mon) /= Just InvisibleMonster
             -> checkPeacefulness (x, y)
           _ -> return ()
 
