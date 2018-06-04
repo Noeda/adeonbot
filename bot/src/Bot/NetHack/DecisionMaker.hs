@@ -192,7 +192,7 @@ enhanceSkillsIfEnhancable = do
     -- In this sence, enhancing is dumb; the bot doesn't do anything special.
     matched <- matchf " a -  "
     if matched
-      then sendRaw "a"
+      then send "a"
       else do pages <- matchf (regex "\\([0-9]+ of [0-9]+\\)")
               end <- matchf "(end) "
               if pages || end
