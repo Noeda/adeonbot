@@ -145,8 +145,7 @@ run config = withRawTerminalMode $ do
       link web_diagnostics
 
       activity_report_tvar <- newTVarIO (ActivityReport { lastActivityObserved = 0
-                                                        , endOfDataObserved = 0
-                                                        , endOfDataExpected = -1
+                                                        , endOfDataObserved = False
                                                         , pendingDataSend = False
                                                         , screenState = emptyScreenState 80 24
                                                         , processingInput = False
@@ -167,7 +166,7 @@ run config = withRawTerminalMode $ do
                                   Nothing -> return ()
                                   Just bs -> do
                                     write_output bs
-                                    writeTVar activity_report_tvar (ar { lastActivityObserved = now, pendingDataSend = False, endOfDataObserved = 0, endOfDataExpected = B.length bs }, Nothing)
+                                    writeTVar activity_report_tvar (ar { lastActivityObserved = now, pendingDataSend = False, endOfDataObserved = False }, Nothing)
   
       withAsync write_outputter $ \write_async -> do
         liftIO $ link write_async
@@ -229,7 +228,7 @@ run config = withRawTerminalMode $ do
         (r, io) <- exhaust thawed st bs next cx cy activity_report_tvar
         return (r, do io
                       (ar, st) <- readTVar activity_report_tvar
-                      writeTVar activity_report_tvar (ar { endOfDataObserved = endOfDataObserved ar + 1 }, st))
+                      writeTVar activity_report_tvar (ar { endOfDataObserved = True }, st))
 
       Free (ReadByte fun) ->
         if B.null bs
